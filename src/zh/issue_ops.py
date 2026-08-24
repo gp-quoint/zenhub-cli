@@ -1,0 +1,521 @@
+"""Issue lifecycle GraphQL mutations and helpers."""
+
+from __future__ import annotations
+
+import re
+from typing import Any
+
+from zh.api import JsonDict, RepoContext, ZhApiError, check_graphql_errors
+from zh.gh_ops import github_issue_url, zenhub_issue_url
+from zh.graphql_ops import add_sub_issues, get_issue_by_info
+from zh.json_helpers import as_dict, as_list, dict_nodes, gql_get
+from zh.schemas import (
+    AssignResult,
+    CreateIssueResult,
+    MoveResult,
+    ReorderResult,
+    UpdateIssueResult,
+)
+from zh.types import reorder_position
+from zh.workspace_ops import find_pipeline_id, resolve_issue_type_id, resolve_priority_id
+
+_POSITIVE_INT = re.compile(r"^[0-9]+$")
+_ESTIMATE = re.compile(r"^[0-9]+(\.[0-9]+)?$")
+
+_MOVE_MUTATION = """
+mutation($input: MoveIssueInput!) {
+  moveIssue(input: $input) {
+    issue {
+      pipelineIssues { nodes { pipeline { name } } }
+    }
+  }
+}
+"""
+
+_SET_ESTIMATE_MUTATION = """
+mutation($input: SetEstimateInput!) {
+  setEstimate(input: $input) { issue { estimate { value } } }
+}
+"""
+
+_SET_PRIORITY_MUTATION = """
+mutation($input: SetPriorityInput!) {
+  setPriority(input: $input) { pipelineIssue { priority { name } } }
+}
+"""
+
+_CHANGE_TYPE_MUTATION = """
+mutation($input: ChangeIssueTypeOfIssuesInput!) {
+  changeIssueTypeOfIssues(input: $input) { issues { number issueType { name } } }
+}
+"""
+
+_ISSUE_PIPELINE_QUERY = """
+query($repoId: ID!, $issueNumber: Int!) {
+  issueByInfo(repositoryId: $repoId, issueNumber: $issueNumber) {
+    id
+    number
+    title
+    pipelineIssues {
+      nodes {
+        pipeline { id name issues { totalCount } }
+      }
+    }
+  }
+}
+"""
+
+_ISSUE_ASSIGNEES_QUERY = """
+query($repoId: ID!, $issueNumber: Int!) {
+  issueByInfo(repositoryId: $repoId, issueNumber: $issueNumber) {
+    id
+    title
+    assignees { nodes { id login } }
+  }
+}
+"""
+
+_WORKSPACE_ASSIGNEES_QUERY = """
+query($workspaceId: ID!) {
+  workspace(id: $workspaceId) {
+    assignees { nodes { id login } }
+  }
+}
+"""
+
+_ADD_ASSIGNEES = """
+mutation($input: AddAssigneesToIssuesInput!) {
+  addAssigneesToIssues(input: $input) { successCount githubErrors }
+}
+"""
+
+_REMOVE_ASSIGNEES = """
+mutation($input: RemoveAssigneesFromIssuesInput!) {
+  removeAssigneesFromIssues(input: $input) { successCount githubErrors }
+}
+"""
+
+_UPDATE_ISSUE = """
+mutation($input: UpdateIssueInput!) {
+  updateIssue(input: $input) { issue { number title } }
+}
+"""
+
+
+def parse_issue_number(raw: str) -> int:
+    stripped = raw.lstrip("#")
+    if not _POSITIVE_INT.match(stripped):
+        msg = f"Invalid issue number: {raw!r}"
+        raise ZhApiError(msg)
+    return int(stripped)
+
+
+def _pipeline_name_before_move(ctx: RepoContext, issue_number: int) -> str:
+    """Best-effort current pipeline name for move reporting (never blocks the move)."""
+    try:
+        resp = ctx.query(_ISSUE_PIPELINE_QUERY, {"repoId": ctx.repo_id, "issueNumber": issue_number})
+        check_graphql_errors(resp, context="issue pipeline lookup")
+        node = as_dict(gql_get(resp, "issueByInfo"))
+        pipes = as_list(as_dict(node.get("pipelineIssues")).get("nodes"))
+        if not pipes:
+            return "(none)"
+        name = as_dict(as_dict(pipes[0]).get("pipeline")).get("name")
+        return str(name) if name else "(none)"
+    except ZhApiError:
+        return "Unknown"
+
+
+def move_issue(ctx: RepoContext, issue_number: int, pipeline_name: str) -> MoveResult:
+    pipeline_id = find_pipeline_id(ctx, pipeline_name)
+    issue = get_issue_by_info(ctx, issue_number)
+    if issue is None:
+        raise ZhApiError(f"Issue #{issue_number} not found in ZenHub")
+    issue_id = issue.get("id")
+    if not isinstance(issue_id, str):
+        raise ZhApiError(f"Issue #{issue_number} has no id")
+    from_pipeline = _pipeline_name_before_move(ctx, issue_number)
+    resp = ctx.query(
+        _MOVE_MUTATION,
+        {"input": {"issueId": issue_id, "pipelineId": pipeline_id, "position": 0}},
+    )
+    check_graphql_errors(resp, context="moveIssue")
+    issue_node = as_dict(gql_get(resp, "moveIssue", "issue"))
+    pipe_nodes = as_list(as_dict(issue_node.get("pipelineIssues")).get("nodes"))
+    first_pipe = as_dict(pipe_nodes[0] if pipe_nodes else None)
+    new_name = as_dict(first_pipe.get("pipeline")).get("name")
+    if not new_name:
+        raise ZhApiError("Failed to move issue")
+    return {
+        "number": str(issue_number),
+        "title": str(issue.get("title") or ""),
+        "from_pipeline": from_pipeline,
+        "to_pipeline": str(new_name),
+    }
+
+
+def _validate_create_options(
+    ctx: RepoContext,
+    *,
+    parent_number: int | None,
+    estimate: str | None,
+    priority_name: str | None,
+) -> None:
+    if parent_number is not None and get_issue_by_info(ctx, parent_number) is None:
+        raise ZhApiError(f"Parent issue #{parent_number} not found")
+    if estimate and not _ESTIMATE.match(estimate):
+        raise ZhApiError(f"Invalid estimate: {estimate!r}")
+    if priority_name:
+        resolve_priority_id(ctx, priority_name)
+
+
+def _build_create_input(
+    ctx: RepoContext,
+    *,
+    title: str,
+    body: str,
+    issue_type: str | None,
+    labels: list[str] | None,
+    assignee: str | None,
+    parent_number: int | None,
+    estimate: str | None,
+    priority_name: str | None,
+) -> dict[str, Any]:
+    if not title.strip():
+        raise ZhApiError("title must be non-empty")
+    _validate_create_options(ctx, parent_number=parent_number, estimate=estimate, priority_name=priority_name)
+    inp: dict[str, Any] = {"repositoryId": ctx.repo_id, "title": title}
+    if body:
+        inp["body"] = body
+    if labels:
+        inp["labels"] = labels
+    if assignee:
+        inp["assignees"] = [assignee.lstrip("@")]
+    if issue_type:
+        inp["issueTypeId"] = resolve_issue_type_id(ctx, issue_type)
+    return inp
+
+
+def _create_issue_record(ctx: RepoContext, inp: dict[str, Any]) -> JsonDict:
+    # Do not select issueType here: ZenHub exposes it as a GraphQL union and
+    # nested selections on createIssue currently fail with
+    # "selections can't be made directly on unions (IssueIssueType)".
+    mutation = """
+    mutation($input: CreateIssueInput!) {
+      createIssue(input: $input) {
+        issue {
+          id
+          number
+          title
+          htmlUrl
+        }
+      }
+    }
+    """
+    resp = ctx.query(mutation, {"input": inp})
+    check_graphql_errors(resp, context="createIssue")
+    issue = as_dict(gql_get(resp, "createIssue", "issue"))
+    if not issue or not isinstance(issue.get("number"), int):
+        raise ZhApiError("createIssue returned no issue number")
+    return issue
+
+
+def _apply_create_followups(
+    ctx: RepoContext,
+    issue: JsonDict,
+    *,
+    title: str,
+    issue_type: str | None,
+    pipeline: str | None,
+    estimate: str | None,
+    priority_name: str | None,
+    parent_number: int | None,
+) -> CreateIssueResult:
+    number = issue["number"]
+    issue_id = issue.get("id")
+    parent_wired: int | None = None
+    if parent_number is not None and isinstance(issue_id, str):
+        add_result = add_sub_issues(ctx, parent_number, [number])
+        if add_result.get("outcome") == "ok":
+            parent_wired = parent_number
+
+    pipeline_set = pipeline
+    if pipeline:
+        move_issue(ctx, number, pipeline)
+
+    estimate_applied = set_estimate(ctx, number, estimate) if estimate else None
+    priority_set = set_priority(ctx, number, priority_name) if priority_name else None
+
+    gh_url = issue.get("htmlUrl") or github_issue_url(ctx.owner_repo, number)
+    zh_url = zenhub_issue_url(ctx.workspace_id, ctx.owner_repo, number)
+
+    return {
+        "number": number,
+        "url": gh_url,
+        "github_url": gh_url,
+        "zenhub_url": zh_url,
+        "title": title,
+        "type": issue_type,
+        "pipeline": pipeline_set,
+        "estimate": estimate_applied,
+        "estimate_requested": float(estimate) if estimate else None,
+        "parent": parent_wired,
+        "priority": priority_set,
+        "priority_requested": priority_name,
+    }
+
+
+def create_issue(
+    ctx: RepoContext,
+    *,
+    title: str,
+    body: str = "",
+    issue_type: str | None = None,
+    labels: list[str] | None = None,
+    assignee: str | None = None,
+    pipeline: str | None = None,
+    estimate: str | None = None,
+    parent_number: int | None = None,
+    priority_name: str | None = None,
+) -> CreateIssueResult:
+    inp = _build_create_input(
+        ctx,
+        title=title,
+        body=body,
+        issue_type=issue_type,
+        labels=labels,
+        assignee=assignee,
+        parent_number=parent_number,
+        estimate=estimate,
+        priority_name=priority_name,
+    )
+    issue = _create_issue_record(ctx, inp)
+    return _apply_create_followups(
+        ctx,
+        issue,
+        title=title,
+        issue_type=issue_type,
+        pipeline=pipeline,
+        estimate=estimate,
+        priority_name=priority_name,
+        parent_number=parent_number,
+    )
+
+
+def set_estimate(ctx: RepoContext, issue_number: int, points: str) -> float | None:
+    if points.lower() == "clear":
+        value: float | None = None
+    elif _ESTIMATE.match(points):
+        value = float(points)
+    else:
+        raise ZhApiError(f"Invalid estimate: {points!r}")
+    issue = get_issue_by_info(ctx, issue_number)
+    if issue is None:
+        raise ZhApiError(f"Issue #{issue_number} not found")
+    issue_id = issue.get("id")
+    if not isinstance(issue_id, str):
+        raise ZhApiError(f"Issue #{issue_number} has no id")
+    resp = ctx.query(
+        _SET_ESTIMATE_MUTATION,
+        {"input": {"issueId": issue_id, "value": value}},
+    )
+    check_graphql_errors(resp, context="setEstimate")
+    applied = as_dict(as_dict(gql_get(resp, "setEstimate", "issue")).get("estimate")).get("value")
+    return float(applied) if applied is not None else None
+
+
+def set_priority(ctx: RepoContext, issue_number: int, level: str) -> str | None:
+    priority_id = None if level.lower() == "clear" else resolve_priority_id(ctx, level)
+    issue = get_issue_by_info(ctx, issue_number)
+    if issue is None:
+        raise ZhApiError(f"Issue #{issue_number} not found")
+    issue_id = issue.get("id")
+    if not isinstance(issue_id, str):
+        raise ZhApiError(f"Issue #{issue_number} has no id")
+    resp = ctx.query(
+        _SET_PRIORITY_MUTATION,
+        {"input": {"issueId": issue_id, "priorityId": priority_id}},
+    )
+    check_graphql_errors(resp, context="setPriority")
+    name = as_dict(as_dict(gql_get(resp, "setPriority", "pipelineIssue")).get("priority")).get("name")
+    return str(name) if name else None
+
+
+def set_issue_type(ctx: RepoContext, issue_number: int, type_name: str) -> str:
+    type_id = resolve_issue_type_id(ctx, type_name)
+    issue = get_issue_by_info(ctx, issue_number)
+    if issue is None:
+        raise ZhApiError(f"Issue #{issue_number} not found")
+    issue_id = issue.get("id")
+    if not isinstance(issue_id, str):
+        raise ZhApiError(f"Issue #{issue_number} has no id")
+    resp = ctx.query(
+        _CHANGE_TYPE_MUTATION,
+        {"input": {"issueIds": [issue_id], "issueTypeId": type_id}},
+    )
+    check_graphql_errors(resp, context="changeIssueTypeOfIssues")
+    issues = as_list(as_dict(gql_get(resp, "changeIssueTypeOfIssues")).get("issues"))
+    if not issues:
+        raise ZhApiError("Failed to change issue type")
+    applied = as_dict(as_dict(issues[0]).get("issueType")).get("name")
+    return str(applied or type_name)
+
+
+def _issue_pipeline_info(ctx: RepoContext, issue_number: int) -> tuple[str, str, str, int]:
+    issue = get_issue_by_info(ctx, issue_number)
+    if issue is None:
+        raise ZhApiError(f"Issue #{issue_number} not found in ZenHub")
+    issue_id = issue.get("id")
+    if not isinstance(issue_id, str):
+        raise ZhApiError(f"Issue #{issue_number} has no id")
+    resp = ctx.query(_ISSUE_PIPELINE_QUERY, {"repoId": ctx.repo_id, "issueNumber": issue_number})
+    check_graphql_errors(resp, context="issue pipeline lookup")
+    node = as_dict(gql_get(resp, "issueByInfo"))
+    pipes = as_list(as_dict(node.get("pipelineIssues")).get("nodes"))
+    if not pipes:
+        raise ZhApiError(f"Issue #{issue_number} is not in any pipeline")
+    pipe = as_dict(pipes[0])
+    pipeline_node = as_dict(pipe.get("pipeline"))
+    pipeline_id = pipeline_node.get("id")
+    total = as_dict(pipeline_node.get("issues")).get("totalCount") or 0
+    if not isinstance(pipeline_id, str):
+        raise ZhApiError(f"Issue #{issue_number} has no pipeline id")
+    return issue_id, str(node.get("title") or issue.get("title") or ""), pipeline_id, int(total)
+
+
+def _parse_reorder_position(raw: str, total_count: int) -> int:
+    try:
+        return reorder_position(raw, total_count=total_count)
+    except ValueError as exc:
+        raise ZhApiError(str(exc)) from exc
+
+
+def reorder_issue(ctx: RepoContext, issue_number: int, position: str) -> ReorderResult:
+    issue_id, title, pipeline_id, total = _issue_pipeline_info(ctx, issue_number)
+    pos_int = _parse_reorder_position(position, total)
+    resp = ctx.query(
+        _MOVE_MUTATION,
+        {"input": {"issueId": issue_id, "pipelineId": pipeline_id, "position": pos_int}},
+    )
+    check_graphql_errors(resp, context="reorderIssue")
+    return {"number": issue_number, "title": title, "position": pos_int}
+
+
+def _fetch_issue_assignees(ctx: RepoContext, issue_number: int) -> JsonDict:
+    resp = ctx.query(_ISSUE_ASSIGNEES_QUERY, {"repoId": ctx.repo_id, "issueNumber": issue_number})
+    check_graphql_errors(resp, context="issue assignees")
+    node = gql_get(resp, "issueByInfo")
+    if not node:
+        raise ZhApiError(f"Issue #{issue_number} not found")
+    return as_dict(node)
+
+
+def _workspace_assignees(ctx: RepoContext) -> list[dict[str, str]]:
+    resp = ctx.query(_WORKSPACE_ASSIGNEES_QUERY, {"workspaceId": ctx.workspace_id})
+    check_graphql_errors(resp, context="workspace assignees")
+    nodes = dict_nodes(as_dict(as_dict(gql_get(resp, "workspace")).get("assignees")).get("nodes"))
+    return [{"id": str(n.get("id")), "login": str(n.get("login"))} for n in nodes if n.get("id") and n.get("login")]
+
+
+def assign_issue(ctx: RepoContext, issue_number: int, usernames: list[str]) -> AssignResult:
+    if not usernames:
+        raise ZhApiError("Usage: zh assign <issue> <username> [username ...]")
+    wanted = list(dict.fromkeys(u.lstrip("@") for u in usernames))
+    issue = _fetch_issue_assignees(ctx, issue_number)
+    issue_id = issue.get("id")
+    if not isinstance(issue_id, str):
+        raise ZhApiError(f"Issue #{issue_number} has no id")
+    title = str(issue.get("title") or "")
+    current = [str(n.get("login")) for n in dict_nodes(as_dict(issue.get("assignees")).get("nodes")) if n.get("login")]
+    ws_users = _workspace_assignees(ctx)
+    ws_logins = {u["login"] for u in ws_users}
+    missing = [u for u in wanted if u not in ws_logins]
+    if missing:
+        raise ZhApiError(f"User(s) not found in workspace: {', '.join(missing)}. Use 'zh users' to list available users.")
+    ids_to_add = [u["id"] for u in ws_users if u["login"] in wanted and u["login"] not in current]
+    if not ids_to_add:
+        return {"number": issue_number, "title": title, "assignees": current, "already_assigned": wanted}
+    resp = ctx.query(_ADD_ASSIGNEES, {"input": {"issueIds": [issue_id], "assigneeIds": ids_to_add}})
+    check_graphql_errors(resp, context="addAssigneesToIssues")
+    success_count = as_dict(gql_get(resp, "addAssigneesToIssues")).get("successCount") or 0
+    if success_count == 0:
+        gh_errors = as_dict(gql_get(resp, "addAssigneesToIssues")).get("githubErrors")
+        raise ZhApiError(f"Failed to assign {', '.join(wanted)}: {gh_errors or 'Unknown error'}")
+    updated = _fetch_issue_assignees(ctx, issue_number)
+    new_assignees = [str(n.get("login")) for n in dict_nodes(as_dict(updated.get("assignees")).get("nodes")) if n.get("login")]
+    return {"number": issue_number, "title": title, "assignees": new_assignees, "added": wanted}
+
+
+def unassign_issue(
+    ctx: RepoContext,
+    issue_number: int,
+    usernames: list[str],
+    *,
+    clear_all: bool = False,
+) -> AssignResult:
+    if clear_all and usernames:
+        raise ZhApiError("Pass specific username(s) OR --all, not both.")
+    if not clear_all and not usernames:
+        raise ZhApiError(
+            "Refusing to remove all assignees by default (this is a destructive, shared-state change).\n"
+            f"Name the user(s) to remove, or pass --all to clear everyone:\n"
+            f"  zh unassign {issue_number} <username> [username ...]\n"
+            f"  zh unassign {issue_number} --all",
+        )
+    issue = _fetch_issue_assignees(ctx, issue_number)
+    issue_id = issue.get("id")
+    if not isinstance(issue_id, str):
+        raise ZhApiError(f"Issue #{issue_number} has no id")
+    title = str(issue.get("title") or "")
+    nodes = dict_nodes(as_dict(issue.get("assignees")).get("nodes"))
+    if clear_all:
+        ids_to_remove = [str(n.get("id")) for n in nodes if n.get("id")]
+        if not ids_to_remove:
+            raise ZhApiError(f"Issue #{issue_number} has no assignees")
+        removed_label = "all assignees"
+    else:
+        wanted = list(dict.fromkeys(u.lstrip("@") for u in usernames))
+        current_logins = {str(n.get("login")) for n in nodes if n.get("login")}
+        not_assigned = [u for u in wanted if u not in current_logins]
+        if not_assigned:
+            assigned = ", ".join(sorted(current_logins)) or "none"
+            raise ZhApiError(f"Not assigned to issue #{issue_number}: {', '.join(not_assigned)}\nCurrent assignees: {assigned}")
+        ids_to_remove = [str(n.get("id")) for n in nodes if str(n.get("login")) in wanted]
+        removed_label = ", ".join(wanted)
+    resp = ctx.query(_REMOVE_ASSIGNEES, {"input": {"issueIds": [issue_id], "assigneeIds": ids_to_remove}})
+    check_graphql_errors(resp, context="removeAssigneesFromIssues")
+    success_count = as_dict(gql_get(resp, "removeAssigneesFromIssues")).get("successCount") or 0
+    if success_count == 0:
+        gh_errors = as_dict(gql_get(resp, "removeAssigneesFromIssues")).get("githubErrors")
+        raise ZhApiError(f"Failed to remove assignee(s): {gh_errors or 'Unknown error'}")
+    updated = _fetch_issue_assignees(ctx, issue_number)
+    remaining = [str(n.get("login")) for n in dict_nodes(as_dict(updated.get("assignees")).get("nodes")) if n.get("login")]
+    return {"number": issue_number, "title": title, "assignees": remaining, "removed": removed_label}
+
+
+def update_issue(
+    ctx: RepoContext,
+    issue_number: int,
+    *,
+    title: str | None = None,
+    body: str | None = None,
+) -> UpdateIssueResult:
+    if title is None and body is None:
+        raise ZhApiError("Nothing to update: provide -t (title) and/or -d (description).")
+    issue = get_issue_by_info(ctx, issue_number)
+    if issue is None:
+        raise ZhApiError(f"Issue #{issue_number} not found")
+    issue_id = issue.get("id")
+    if not isinstance(issue_id, str):
+        raise ZhApiError(f"Issue #{issue_number} has no id")
+    inp: dict[str, Any] = {"issueId": issue_id}
+    if title is not None:
+        inp["title"] = title
+    if body is not None:
+        inp["body"] = body
+    resp = ctx.query(_UPDATE_ISSUE, {"input": inp})
+    check_graphql_errors(resp, context="updateIssue")
+    updated = as_dict(gql_get(resp, "updateIssue", "issue"))
+    resulting_title = updated.get("title")
+    if not resulting_title:
+        raise ZhApiError(f"Failed to update #{issue_number}")
+    return {"number": issue_number, "title": str(resulting_title)}

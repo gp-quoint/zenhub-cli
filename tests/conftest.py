@@ -1,18 +1,4 @@
-"""pytest fixtures + sys.path setup for the zh test suite.
-
-The Python modules under test (`zh_api`, `zh_graphql_ops`) live as flat
-files at the repo root rather than in an installed package. Adding the
-repo root to sys.path here means `import zh_api` works in every test.
-
-We also set `ZH_MCP_SKIP_BOOTSTRAP=1` before any test module imports
-`mcp_server`. The MCP server's normal import path validates (and
-builds, if missing or broken) a venv under `$XDG_DATA_HOME/zh/venv`
-and then `os.execv`s into it — which would mid-flight replace the
-pytest process. The sentinel keeps the bootstrap dormant and
-substitutes a no-op `FastMCP` stub so tests can exercise the tool
-functions' guards and result shapes without pulling in mcp / torch /
-transformers / numpy.
-"""
+"""pytest fixtures for the zh Python package."""
 
 from __future__ import annotations
 
@@ -20,13 +6,36 @@ import os
 import sys
 from pathlib import Path
 
-# Set BEFORE the sys.path tweak so any later `import mcp_server` from a
-# test sees it in its environment. Use direct assignment (not
-# `setdefault`) so a stale `ZH_MCP_SKIP_BOOTSTRAP=0` in the developer's
-# shell can't sneak past and trigger a real venv build mid-test.
 os.environ["ZH_MCP_SKIP_BOOTSTRAP"] = "1"
+os.environ.setdefault("ZH_BKT", "0")
 
-# Repo root is the parent of this `tests/` directory.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _reset_zh_caches() -> None:
+    from zh.api import clear_api_caches
+    from zh.graphql_cache import clear_process_read_cache
+    from zh.workspace_ops import _cached_pipeline_nodes
+
+    clear_api_caches()
+    clear_process_read_cache()
+    _cached_pipeline_nodes.cache_clear()
+    yield
+    clear_api_caches()
+    clear_process_read_cache()
+    _cached_pipeline_nodes.cache_clear()
+
+# modules that import the removed bash CLI at collection time
+collect_ignore = [
+    "test_assign_unassign_safety.py",
+    "test_verb_matrix.py",
+    "test_zh_bash_regression.py",
+    "test_zh_production_regression.py",
+    "test_zh_gh_repo_id.py",
+    "test_zh_auth_guidance.py",
+]

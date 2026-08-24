@@ -41,17 +41,10 @@ import shutil
 import subprocess
 from pathlib import Path
 
-# Repo root resolves through whatever cwd the test is invoked from.
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ZH_SCRIPT = REPO_ROOT / "zh"
 
-# v1.9.2 round-4 (PR #27) finding #11: track every isolated-HOME
-# tempdir the harness creates and remove them all at process exit.
-# Each `run_zh_with_stubs` call provisions a fresh tempdir to defeat
-# stray `/tmp/.config/zh/config` interference (round-3 #10); over a
-# full ~50-test cycle that's dozens of dirs left in TMPDIR for local
-# devs. CI runners wipe scratch between jobs so this didn't matter
-# there, but local-iteration tempdirs accumulate without a sweeper.
+# v1.9.2 round-4 #11: track isolated-HOME tempdirs and remove at exit so local runs don't accumulate dozens of scratch dirs.
 _HARNESS_TEMPDIRS: list[str] = []
 
 
@@ -112,97 +105,54 @@ def run_zh_with_stubs(
     Returns:
         subprocess.CompletedProcess (returncode, stdout, stderr).
     """
-    # Defaults that keep load_config and the helpers from reaching out:
-    # ZH_TOKEN must be set or zh_graphql refuses to run.
-    #
-    # v1.9.2 round-3 (PR #27) finding #10: HOME points at an isolated
-    # per-call tempdir instead of /tmp so a stray /tmp/.config/zh/config
-    # (from another tenant on a shared CI host, or a prior test run)
-    # cannot silently override the harness-provided ZH_TOKEN / ZH_REPO
-    # / ZH_WORKSPACE via load_config's source step. The tempdir is
-    # left in place for inspection if a test fails (Python's GC will
-    # not auto-remove it); modern CI runners wipe scratch between
-    # jobs, so this does not leak across runs.
+    # ZH_TOKEN required; per-call isolated HOME defeats stray /tmp/.config/zh/config (round-3 #10).
     import tempfile
+
     _isolated_home = tempfile.mkdtemp(prefix="zh-test-home-")
-    # v1.9.2 round-4 (PR #27) finding #11: register for atexit cleanup
-    # so local-iteration runs don't accumulate dozens of tempdirs.
     _HARNESS_TEMPDIRS.append(_isolated_home)
     env_defaults = {
-        # PATH must include common locations so jq/gh/curl resolve if
-        # tests actually invoke them (they shouldn't, but the harness
-        # should not break path-sensitive helpers).
         "PATH": "/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin",
         "ZH_TOKEN": "test-token-do-not-use",
         "ZH_REPO": "acme/widgets",
         "ZH_WORKSPACE": "TestWS",
-        # Per-call isolated HOME so load_config cannot source a
-        # stray config file written by another process / tenant.
+        # Per-call isolated HOME so load_config cannot source a stray config from another tenant.
         "HOME": _isolated_home,
-        # Honor the NO_COLOR informal standard. As of round-3 #9,
-        # `zh` now respects this and suppresses ANSI escapes when
-        # set, so tests can match plain text without strip helpers
-        # in NEW assertions (existing helpers stay for back-compat).
         "NO_COLOR": "1",
+        # Disable bkt: same-shell curl() stubs never run when bkt wraps zh_graphql reads.
+        "ZH_BKT": "0",
     }
     if extra_env:
         env_defaults.update(extra_env)
 
-    # The wrapper sources the actual zh script. Use the absolute path
-    # so the cwd doesn't matter (and so tests run from any directory).
-    #
-    # IMPORTANT: do NOT disable `set -e` after source. Production runs
-    # with `set -euo pipefail`; disabling it in the harness would hide
-    # exactly the round-4 / round-7 #5 class of bug (bare command
-    # substitution that aborts under set -e). The harness lets the
-    # production safety flags stay armed so a non-fail-soft envelope
-    # in production fails the test loudly.
-    #
-    # Stubs are applied AFTER source; bash function redefinitions
-    # override earlier ones in the same shell.
-    wrapper = (
-        f'source "{ZH_SCRIPT}"\n'
-        f"{stubs}\n"
-        f"{invocation}\n"
-    )
+    # Keep set -e armed after source — disabling it hid round-4/7 envelope-abort bugs.
+    wrapper = f'source "{ZH_SCRIPT}"\n{stubs}\n{invocation}\n'
 
     cmd = ["bash", "-c", wrapper, "_"]
     if args:
         cmd.extend(args)
 
-    # v1.9.2 round-3 (PR #27) finding #7: inherit specific parent-env
-    # vars so locale (LANG / LC_*), TMPDIR, TERM, USER,
-    # PYTHONIOENCODING and similar harness-friendly vars survive.
-    #
-    # v1.9.2 round-4 (PR #27) finding #4: use an ALLOWLIST instead of
-    # `dict(os.environ, **env_defaults)`. The earlier merge passed
-    # through every `ZH_*` var from the developer's shell — most
-    # consequentially ZH_REST_TOKEN, which a test that ran a
-    # REST-using code path without stubbing the REST helper would
-    # send to the live ZenHub API along with the developer's real
-    # credential. The allowlist restricts inheritance to a curated
-    # set of environment-shaping vars (locale / tmpdir / etc.) that
-    # affect rendering but carry no secrets, then layers
-    # env_defaults on top so the harness's explicit overrides win.
+    # Allowlist env inheritance (round-4 #4): never pass through developer ZH_* secrets like ZH_REST_TOKEN.
     import os as _os
     import sys as _sys
+
     _ALLOWED_INHERIT = (
-        "LANG", "LC_ALL", "LC_CTYPE", "LC_COLLATE", "LC_TIME",
-        "LC_NUMERIC", "LC_MESSAGES",
-        "TMPDIR", "TERM", "USER", "LOGNAME", "SHELL",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LC_COLLATE",
+        "LC_TIME",
+        "LC_NUMERIC",
+        "LC_MESSAGES",
+        "TMPDIR",
+        "TERM",
+        "USER",
+        "LOGNAME",
+        "SHELL",
         "PYTHONIOENCODING",
     )
     inherited = {k: _os.environ[k] for k in _ALLOWED_INHERIT if k in _os.environ}
 
-    # v1.9.3 pattern-sweep finding #8: also inherit PATH so jq / gh /
-    # curl resolve on Nix profiles, asdf shims, /opt/conda/bin,
-    # ~/.local/bin, and other non-/usr/{,local/}bin install locations.
-    # The hardcoded `env_defaults["PATH"]` line below is a "common
-    # locations" floor; the parent's PATH gets PRE-pended so a
-    # developer's own install of jq / gh wins over a stale system
-    # version, but only after a sanitization pass that drops
-    # world-writable directories (a known Nix / dev-container pitfall
-    # where `/tmp/xxxxxx-nix-shell` style entries can land on PATH).
+    # Inherit sanitized parent PATH (round-3 #8/#4): Nix/asdf shims win, but drop world-writable dirs.
     parent_path = _os.environ.get("PATH", "")
     safe_path_parts = []
     dropped_entries = []
@@ -214,31 +164,14 @@ def run_zh_with_stubs(
                 st = _os.stat(entry)
             except OSError:
                 continue
-            # Skip every world-writable directory. v1.9.4 (PR
-            # #35) finding #4: the previous sticky-bit carve-out was
-            # the wrong threat model — sticky prevents non-owners from
-            # DELETING files, but does NOT prevent any local user from
-            # CREATING a binary in the directory. A test running on a
-            # host where `/tmp` (or any sticky world-writable dir)
-            # ended up on PATH would happily resolve `jq` / `gh` to an
-            # attacker-planted binary. The hardcoded floor PATH
-            # (`/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin`) covers
-            # every legitimate case for which tools need to resolve in
-            # the test harness; no production PATH should require an
-            # exemption for a world-writable entry.
+            # Drop world-writable PATH entries — sticky bit doesn't stop planted binaries (round-4 #4).
             mode = st.st_mode
             world_writable = bool(mode & 0o002)
             if world_writable:
                 dropped_entries.append(entry)
                 continue
             safe_path_parts.append(entry)
-    # v1.9.4 round-2 finding #5: when the filter empties every parent
-    # PATH entry (Nix scratch profiles, certain bind-mounted CI
-    # scratch dirs), tests can silently fall back to the floor and
-    # later fail with `jq: command not found` without any indicator
-    # that the filter caused it. Emit a one-line breadcrumb when any
-    # entry was dropped, gated on `ZH_TEST_PATH_FILTER_VERBOSE=1` so
-    # the default test output stays quiet.
+    # Optional breadcrumb when PATH filter drops entries (round-4 #5); gated on ZH_TEST_PATH_FILTER_VERBOSE.
     if dropped_entries and _os.environ.get("ZH_TEST_PATH_FILTER_VERBOSE") == "1":
         _sys.stderr.write(
             "_bash_runner: filtered "
@@ -250,10 +183,6 @@ def run_zh_with_stubs(
         inherited["PATH"] = ":".join(safe_path_parts)
 
     merged_env = {**inherited, **env_defaults}
-    # PATH ordering: prepend the sanitized parent PATH if we inherited
-    # one, then layer env_defaults["PATH"] (the common-locations floor)
-    # after it. This way an asdf / Nix shim resolves before /usr/bin,
-    # but the floor still catches the no-parent-PATH edge case.
     if "PATH" in inherited:
         merged_env["PATH"] = inherited["PATH"] + ":" + env_defaults["PATH"]
     return subprocess.run(

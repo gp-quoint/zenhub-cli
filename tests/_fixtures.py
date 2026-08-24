@@ -21,14 +21,12 @@ from unittest.mock import patch
 import zh_api
 
 
-# =============================================================================
-# RepoContext (no network)
-# =============================================================================
-
-def make_ctx(owner_repo: str = "acme/widgets",
-             repo_id: str = "repo-gid-acme-widgets",
-             workspace_id: str = "ws-gid-backend",
-             token: str = "fake-token") -> zh_api.RepoContext:
+def make_ctx(
+    owner_repo: str = "acme/widgets",
+    repo_id: str = "repo-gid-acme-widgets",
+    workspace_id: str = "ws-gid-backend",
+    token: str = "fake-token",
+) -> zh_api.RepoContext:
     """Build a RepoContext without any network calls."""
     return zh_api.RepoContext(
         owner_repo=owner_repo,
@@ -48,16 +46,12 @@ def patch_ctx_query(ctx: zh_api.RepoContext, responses: list[dict]):
     """
     it = iter(responses)
 
-    def _next(*args, **kwargs):  # noqa: ARG001
+    def _next(*args, **kwargs):
         return next(it)
 
     with patch.object(ctx, "query", side_effect=_next):
         yield
 
-
-# =============================================================================
-# `issueByInfo` query response
-# =============================================================================
 
 def issue_by_info_response(
     number: int,
@@ -95,35 +89,26 @@ def issue_not_found_response() -> dict:
     return {"data": {"issueByInfo": None}}
 
 
-# =============================================================================
-# `githubChildIssues` (sub-issue listing) page
-# =============================================================================
-
-def child_node(number: int,
-               *,
-               node_id: str | None = None,
-               title: str | None = None,
-               state: str = "OPEN",
-               assignees: list[str] | None = None,
-               pipeline: str | None = None,
-               owner: str = "acme",
-               repo: str = "widgets") -> dict:
+def child_node(
+    number: int,
+    *,
+    node_id: str | None = None,
+    title: str | None = None,
+    state: str = "OPEN",
+    assignees: list[str] | None = None,
+    pipeline: str | None = None,
+    owner: str = "acme",
+    repo: str = "widgets",
+) -> dict:
     """One child node inside `githubChildIssues.nodes[]`."""
     return {
         "id": node_id or f"issue-gid-{number}",
         "number": number,
         "title": title or f"Issue {number}",
         "state": state,
-        "assignees": {
-            "nodes": [{"login": a} for a in (assignees or [])]
-        },
-        "pipelineIssue": (
-            {"pipeline": {"name": pipeline}} if pipeline else None
-        ),
-        "pipelineIssues": (
-            {"nodes": [{"pipeline": {"name": pipeline}}]}
-            if pipeline else {"nodes": []}
-        ),
+        "assignees": {"nodes": [{"login": a} for a in (assignees or [])]},
+        "pipelineIssue": ({"pipeline": {"name": pipeline}} if pipeline else None),
+        "pipelineIssues": ({"nodes": [{"pipeline": {"name": pipeline}}]} if pipeline else {"nodes": []}),
         "repository": {"ownerName": owner, "name": repo},
     }
 
@@ -147,9 +132,7 @@ def subissue_list_response(
                 "title": parent_title,
                 "state": parent_state,
                 "githubChildIssues": {
-                    "totalCount": (
-                        total_count if total_count is not None else len(nodes)
-                    ),
+                    "totalCount": (total_count if total_count is not None else len(nodes)),
                     "pageInfo": {
                         "hasNextPage": has_next,
                         "endCursor": end_cursor,
@@ -165,10 +148,6 @@ def subissue_parent_not_found() -> dict:
     """Parent lookup returns null in `githubChildIssues`."""
     return {"data": {"issueByInfo": None}}
 
-
-# =============================================================================
-# `addSubIssues` / `removeSubIssues` mutation payloads
-# =============================================================================
 
 def add_sub_issues_response(
     *,
@@ -210,8 +189,7 @@ def remove_sub_issues_response(
     }
 
 
-def reprioritize_sub_issue_response(success: bool = True,
-                                    github_errors: dict | None = None) -> dict:
+def reprioritize_sub_issue_response(success: bool = True, github_errors: dict | None = None) -> dict:
     return {
         "data": {
             "reprioritizeSubIssue": {
@@ -221,10 +199,6 @@ def reprioritize_sub_issue_response(success: bool = True,
         }
     }
 
-
-# =============================================================================
-# `workspace.sprints` page
-# =============================================================================
 
 def sprint_node(
     sprint_id: str,
@@ -263,10 +237,7 @@ def sprints_page(
             "workspace": {
                 "id": "ws-gid-backend",
                 "name": workspace_name,
-                "activeSprint": (
-                    {"id": active_sprint_id, "name": "Sprint 7"}
-                    if active_sprint_id else None
-                ),
+                "activeSprint": ({"id": active_sprint_id, "name": "Sprint 7"} if active_sprint_id else None),
                 "sprints": {
                     "pageInfo": {
                         "hasNextPage": has_next,
@@ -278,10 +249,6 @@ def sprints_page(
         }
     }
 
-
-# =============================================================================
-# Sprint detail header / issues
-# =============================================================================
 
 def sprint_header_response(
     *,
@@ -333,11 +300,7 @@ def sprint_issue_wrapper(
             "estimate": ({"value": estimate} if estimate is not None else None),
             "assignees": {"nodes": [{"login": a} for a in (assignees or [])]},
             "repository": {"ownerName": owner, "name": repo},
-            "pipelineIssues": {
-                "nodes": (
-                    [{"pipeline": {"name": pipeline}}] if pipeline else []
-                )
-            },
+            "pipelineIssues": {"nodes": ([{"pipeline": {"name": pipeline}}] if pipeline else [])},
         }
     }
 
@@ -368,10 +331,6 @@ def sprint_issues_null_node() -> dict:
     """Walker page response when `data.node` is null."""
     return {"data": {"node": None}}
 
-
-# =============================================================================
-# Sprint membership mutations
-# =============================================================================
 
 def add_issues_to_sprints_response(
     *,
@@ -450,7 +409,8 @@ def remove_issues_from_sprints_response(
                                     "issue": {
                                         "number": n,
                                         "repository": {
-                                            "ownerName": o, "name": r,
+                                            "ownerName": o,
+                                            "name": r,
                                         },
                                     }
                                 }

@@ -25,9 +25,8 @@ from __future__ import annotations
 
 from _bash_runner import run_zh_with_stubs
 
-# A gh that exits 0 but prints the 404 error body to stdout. This is the
-# exact shape that produced the user-reported cascade: a broken PATH after
-# a dep reinstall resolved a gh that did not fail closed.
+# A gh that exits 0 but prints the 404 error body to stdout. This is the exact shape that produced the user-reported cascade: a
+# broken PATH after a dep reinstall resolved a gh that did not fail closed.
 _GH_BODY_EXIT0 = (
     r"""gh() { printf '%s' '{"message":"Not Found","""
     r""""documentation_url":"https://docs.github.com/rest","status":"404"}'; return 0; }"""
@@ -35,9 +34,7 @@ _GH_BODY_EXIT0 = (
 
 # A well-behaved gh that exits non-zero on a 404 (and, with --jq, also
 # prints the error body to stdout).
-_GH_BODY_EXIT1 = (
-    r"""gh() { printf '%s' '{"message":"Not Found","status":"404"}'; return 1; }"""
-)
+_GH_BODY_EXIT1 = r"""gh() { printf '%s' '{"message":"Not Found","status":"404"}'; return 1; }"""
 
 # A healthy gh: numeric id on stdout, clean exit.
 _GH_NUMERIC = r"""gh() { printf '%s' '12345'; }"""

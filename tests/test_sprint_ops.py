@@ -11,7 +11,6 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
-
 import zh_api
 import zh_graphql_ops
 
@@ -34,19 +33,20 @@ def _patch_ctx_query(ctx: zh_api.RepoContext, responses: list[dict]):
     """
     it = iter(responses)
     return patch.object(
-        ctx, "query",
+        ctx,
+        "query",
         side_effect=lambda query, variables=None: next(it),
     )
 
 
-# =============================================================================
-# Test fixture builders
-# =============================================================================
-
-def _sprints_page(nodes: list[dict], *, has_next: bool = False,
-                  end_cursor: str | None = None,
-                  workspace_name: str = "Backend Team",
-                  active_id: str | None = "sprint-7") -> dict:
+def _sprints_page(
+    nodes: list[dict],
+    *,
+    has_next: bool = False,
+    end_cursor: str | None = None,
+    workspace_name: str = "Backend Team",
+    active_id: str | None = "sprint-7",
+) -> dict:
     """Build a single page of `workspace.sprints` response.
 
     The new query shape includes `pageInfo`; tests need to supply it
@@ -57,10 +57,7 @@ def _sprints_page(nodes: list[dict], *, has_next: bool = False,
             "workspace": {
                 "id": "workspace-gid-456",
                 "name": workspace_name,
-                "activeSprint": (
-                    {"id": active_id, "name": "Sprint 7"}
-                    if active_id else None
-                ),
+                "activeSprint": ({"id": active_id, "name": "Sprint 7"} if active_id else None),
                 "sprints": {
                     "pageInfo": {
                         "hasNextPage": has_next,
@@ -73,12 +70,17 @@ def _sprints_page(nodes: list[dict], *, has_next: bool = False,
     }
 
 
-def _sprint_node(sprint_id: str, name: str, *, state: str = "OPEN",
-                 start: str = "2026-05-01T00:00:00Z",
-                 end: str = "2026-05-15T00:00:00Z",
-                 completed: float = 5.0,
-                 total: float = 13.0,
-                 closed: int = 3) -> dict:
+def _sprint_node(
+    sprint_id: str,
+    name: str,
+    *,
+    state: str = "OPEN",
+    start: str = "2026-05-01T00:00:00Z",
+    end: str = "2026-05-15T00:00:00Z",
+    completed: float = 5.0,
+    total: float = 13.0,
+    closed: int = 3,
+) -> dict:
     return {
         "id": sprint_id,
         "name": name,
@@ -91,9 +93,7 @@ def _sprint_node(sprint_id: str, name: str, *, state: str = "OPEN",
     }
 
 
-def _sprint_header_response(*, name: str = "Sprint 7",
-                            description: str = "Stabilize the auth refactor",
-                            state: str = "OPEN") -> dict:
+def _sprint_header_response(*, name: str = "Sprint 7", description: str = "Stabilize the auth refactor", state: str = "OPEN") -> dict:
     return {
         "data": {
             "node": {
@@ -111,13 +111,17 @@ def _sprint_header_response(*, name: str = "Sprint 7",
     }
 
 
-def _issue_node(number: int, *, title: str | None = None,
-                state: str = "OPEN",
-                estimate: int | None = 3,
-                assignees: list[str] | None = None,
-                pipeline: str | None = "In Progress",
-                owner: str = "acme",
-                repo_name: str = "widgets") -> dict:
+def _issue_node(
+    number: int,
+    *,
+    title: str | None = None,
+    state: str = "OPEN",
+    estimate: int | None = 3,
+    assignees: list[str] | None = None,
+    pipeline: str | None = "In Progress",
+    owner: str = "acme",
+    repo_name: str = "widgets",
+) -> dict:
     return {
         "issue": {
             "number": number,
@@ -125,21 +129,14 @@ def _issue_node(number: int, *, title: str | None = None,
             "state": state,
             "htmlUrl": f"https://github.com/{owner}/{repo_name}/issues/{number}",
             "estimate": ({"value": estimate} if estimate is not None else None),
-            "assignees": {
-                "nodes": [{"login": a} for a in (assignees or [])]
-            },
+            "assignees": {"nodes": [{"login": a} for a in (assignees or [])]},
             "repository": {"ownerName": owner, "name": repo_name},
-            "pipelineIssues": {
-                "nodes": (
-                    [{"pipeline": {"name": pipeline}}] if pipeline else []
-                )
-            },
+            "pipelineIssues": {"nodes": ([{"pipeline": {"name": pipeline}}] if pipeline else [])},
         }
     }
 
 
-def _sprint_issues_page(nodes: list[dict], *, has_next: bool = False,
-                        end_cursor: str | None = None) -> dict:
+def _sprint_issues_page(nodes: list[dict], *, has_next: bool = False, end_cursor: str | None = None) -> dict:
     return {
         "data": {
             "node": {
@@ -155,20 +152,23 @@ def _sprint_issues_page(nodes: list[dict], *, has_next: bool = False,
     }
 
 
-# =============================================================================
-# list_sprints
-# =============================================================================
-
 def test_list_sprints_open_only_marks_active():
     """The active sprint's id is marked with is_active=True."""
     ctx = _ctx()
-    response = _sprints_page([
-        _sprint_node("sprint-7", "Sprint 7"),
-        _sprint_node("sprint-8", "Sprint 8",
-                     start="2026-05-15T00:00:00Z",
-                     end="2026-05-29T00:00:00Z",
-                     completed=0.0, total=0.0, closed=0),
-    ])
+    response = _sprints_page(
+        [
+            _sprint_node("sprint-7", "Sprint 7"),
+            _sprint_node(
+                "sprint-8",
+                "Sprint 8",
+                start="2026-05-15T00:00:00Z",
+                end="2026-05-29T00:00:00Z",
+                completed=0.0,
+                total=0.0,
+                closed=0,
+            ),
+        ]
+    )
     with _patch_ctx_query(ctx, [response]):
         out = zh_graphql_ops.list_sprints(ctx)
     assert out["ok"] is True
@@ -197,8 +197,7 @@ def test_list_sprints_walks_pagination_for_name_lookup():
     backs _find_sprint_id) walks every page.
     """
     ctx = _ctx()
-    page_one_nodes = [_sprint_node(f"sprint-{i}", f"Sprint {i}",
-                                   state="OPEN") for i in range(1, 51)]
+    page_one_nodes = [_sprint_node(f"sprint-{i}", f"Sprint {i}", state="OPEN") for i in range(1, 51)]
     page_two_nodes = [_sprint_node("sprint-old", "Sprint Old", state="OPEN")]
     responses = [
         _sprints_page(page_one_nodes, has_next=True, end_cursor="cursor-2"),
@@ -233,22 +232,24 @@ def test_list_sprints_serializes_points_as_float():
     fallback, missing values are floats too.
     """
     ctx = _ctx()
-    response = _sprints_page([
-        # Sprint with explicit non-zero floats — should round-trip
-        _sprint_node("sprint-A", "A", completed=5.5, total=13.0),
-        # Sprint with the values explicitly absent (None) — fallback
-        # should be 0.0 (a float), not 0 (an int).
-        {
-            "id": "sprint-B",
-            "name": "B",
-            "state": "OPEN",
-            "startAt": "2026-05-01T00:00:00Z",
-            "endAt": "2026-05-15T00:00:00Z",
-            "completedPoints": None,
-            "totalPoints": None,
-            "closedIssuesCount": 0,
-        },
-    ])
+    response = _sprints_page(
+        [
+            # Sprint with explicit non-zero floats — should round-trip
+            _sprint_node("sprint-A", "A", completed=5.5, total=13.0),
+            # Sprint with the values explicitly absent (None) — fallback
+            # should be 0.0 (a float), not 0 (an int).
+            {
+                "id": "sprint-B",
+                "name": "B",
+                "state": "OPEN",
+                "startAt": "2026-05-01T00:00:00Z",
+                "endAt": "2026-05-15T00:00:00Z",
+                "completedPoints": None,
+                "totalPoints": None,
+                "closedIssuesCount": 0,
+            },
+        ]
+    )
     with _patch_ctx_query(ctx, [response]):
         out = zh_graphql_ops.list_sprints(ctx)
     a = next(s for s in out["sprints"] if s["name"] == "A")
@@ -262,31 +263,41 @@ def test_list_sprints_serializes_points_as_float():
     assert isinstance(b["total_points"], float)
 
 
-# =============================================================================
-# get_sprint_detail
-# =============================================================================
-
 def test_get_sprint_detail_by_name_case_insensitive():
     ctx = _ctx()
     responses = [
         # 1. _find_sprint_id calls list_sprints to walk sprints
-        _sprints_page([
-            _sprint_node("sprint-7", "Sprint 7"),
-            _sprint_node("sprint-6", "Sprint 6", state="CLOSED",
-                         start="2026-04-15T00:00:00Z",
-                         end="2026-05-01T00:00:00Z",
-                         completed=18.0, total=21.0, closed=9),
-        ]),
+        _sprints_page(
+            [
+                _sprint_node("sprint-7", "Sprint 7"),
+                _sprint_node(
+                    "sprint-6",
+                    "Sprint 6",
+                    state="CLOSED",
+                    start="2026-04-15T00:00:00Z",
+                    end="2026-05-01T00:00:00Z",
+                    completed=18.0,
+                    total=21.0,
+                    closed=9,
+                ),
+            ]
+        ),
         # 2. Sprint header
         _sprint_header_response(),
         # 3. Sprint issues (single page)
-        _sprint_issues_page([
-            _issue_node(100, title="Add token rotation",
-                        assignees=["alice"]),
-            _issue_node(101, title="Wire up refresh-token endpoint",
-                        state="CLOSED", estimate=None,
-                        assignees=[], pipeline=None),
-        ]),
+        _sprint_issues_page(
+            [
+                _issue_node(100, title="Add token rotation", assignees=["alice"]),
+                _issue_node(
+                    101,
+                    title="Wire up refresh-token endpoint",
+                    state="CLOSED",
+                    estimate=None,
+                    assignees=[],
+                    pipeline=None,
+                ),
+            ]
+        ),
     ]
     with _patch_ctx_query(ctx, responses):
         out = zh_graphql_ops.get_sprint_detail(ctx, "sprint 7")
@@ -361,12 +372,95 @@ def test_get_sprint_detail_walks_issues_pagination():
     assert out["pagination_warning"] is None
 
 
-# =============================================================================
-# Sprint mutations (Bucket A): add_issues_to_sprint / remove_issues_from_sprint
-# =============================================================================
+def _pipelines_order_resp(names: list[str]) -> dict:
+    return {
+        "data": {
+            "workspace": {
+                "pipelinesConnection": {
+                    "nodes": [{"name": n} for n in names],
+                }
+            }
+        }
+    }
 
-def _issue_by_info_resp(number: int, *, owner: str = "acme",
-                        repo_name: str = "widgets") -> dict:
+
+def test_get_sprint_detail_sorts_by_pipeline_then_id():
+    """Sprint issues sort by board pipeline, then repo, then number.
+
+    Input order is deliberately scrambled: higher id first, pipelines
+    out of board order, same # across repos. Output must be New Issues
+    → In Progress → Done; within a column, repo then ascending number.
+    """
+    ctx = _ctx()
+    responses = [
+        _sprints_page([_sprint_node("sprint-7", "Sprint 7")]),
+        _sprint_header_response(),
+        _sprint_issues_page(
+            [
+                _issue_node(50, pipeline="Done"),
+                _issue_node(10, pipeline="In Progress"),
+                _issue_node(30, pipeline="New Issues"),
+                _issue_node(5, pipeline="In Progress"),
+                _issue_node(20, pipeline="New Issues"),
+                _issue_node(1, pipeline="In Progress", owner="acme", repo_name="bravo"),
+                _issue_node(1, pipeline="In Progress", owner="acme", repo_name="alpha"),
+                _issue_node(99, pipeline=None),  # unknown → after known cols
+            ]
+        ),
+        _pipelines_order_resp(["New Issues", "In Progress", "Done"]),
+    ]
+    with _patch_ctx_query(ctx, responses):
+        out = zh_graphql_ops.get_sprint_detail(ctx, "current")
+    triples = [
+        (
+            i["pipeline"],
+            f"{i['repository']['owner']}/{i['repository']['name']}",
+            i["number"],
+        )
+        for i in out["issues"]
+    ]
+    assert triples == [
+        ("New Issues", "acme/widgets", 20),
+        ("New Issues", "acme/widgets", 30),
+        ("In Progress", "acme/alpha", 1),
+        ("In Progress", "acme/bravo", 1),
+        ("In Progress", "acme/widgets", 5),
+        ("In Progress", "acme/widgets", 10),
+        ("Done", "acme/widgets", 50),
+        (None, "acme/widgets", 99),
+    ]
+
+
+def test_sort_issues_by_pipeline_then_id_unit():
+    """Direct pin of the sort helper (no GraphQL)."""
+    ctx = _ctx()
+    issues = [
+        {"number": 3, "pipeline": "B", "repository": {"owner": "acme", "name": "widgets"}},
+        {"number": 1, "pipeline": "A", "repository": {"owner": "acme", "name": "bravo"}},
+        {"number": 1, "pipeline": "A", "repository": {"owner": "acme", "name": "alpha"}},
+        {"number": 2, "pipeline": "A", "repository": {"owner": "acme", "name": "widgets"}},
+        {"number": 9, "pipeline": "Z-missing", "repository": {"owner": "acme", "name": "widgets"}},
+    ]
+    with _patch_ctx_query(ctx, [_pipelines_order_resp(["A", "B"])]):
+        sorted_issues = zh_graphql_ops._sort_issues_by_pipeline_then_id(ctx, issues)
+    keys = [
+        (
+            i["pipeline"],
+            f"{i['repository']['owner']}/{i['repository']['name']}",
+            i["number"],
+        )
+        for i in sorted_issues
+    ]
+    assert keys == [
+        ("A", "acme/alpha", 1),
+        ("A", "acme/bravo", 1),
+        ("A", "acme/widgets", 2),
+        ("B", "acme/widgets", 3),
+        ("Z-missing", "acme/widgets", 9),
+    ]
+
+
+def _issue_by_info_resp(number: int, *, owner: str = "acme", repo_name: str = "widgets") -> dict:
     """Single-issue lookup stub (used by mutation pre-flight)."""
     return {
         "data": {
@@ -397,7 +491,8 @@ def _add_resp(linked_numbers: list[int], *, sprint_id: str = "sprint-7") -> dict
                         "issue": {
                             "number": n,
                             "repository": {
-                                "ownerName": "acme", "name": "widgets",
+                                "ownerName": "acme",
+                                "name": "widgets",
                             },
                         },
                         "sprint": {"id": sprint_id},
@@ -409,8 +504,7 @@ def _add_resp(linked_numbers: list[int], *, sprint_id: str = "sprint-7") -> dict
     }
 
 
-def _remove_resp(still_attached_numbers: list[int],
-                 *, sprint_id: str = "sprint-7") -> dict:
+def _remove_resp(still_attached_numbers: list[int], *, sprint_id: str = "sprint-7") -> dict:
     """`removeIssuesFromSprints` response wrapper.
 
     `still_attached_numbers` is what remains in the sprint AFTER the
@@ -443,8 +537,6 @@ def _remove_resp(still_attached_numbers: list[int],
         }
     }
 
-
-# --- add_issues_to_sprint -------------------------------------------------
 
 def test_add_issues_to_sprint_happy_path():
     """All inputs come back as links → outcome=ok, succeeded=inputs, failed=[]."""
@@ -479,9 +571,7 @@ def test_add_issues_to_sprint_partial_failure():
         _add_resp([101]),  # only #101 came back as linked
     ]
     with _patch_ctx_query(ctx, responses):
-        out = zh_graphql_ops.add_issues_to_sprint(
-            ctx, "Sprint 7", [100, 101, 102]
-        )
+        out = zh_graphql_ops.add_issues_to_sprint(ctx, "Sprint 7", [100, 101, 102])
     assert out["ok"] is False
     assert out["outcome"] == "partial"
     assert out["succeeded"] == [101]
@@ -505,9 +595,8 @@ def test_add_issues_to_sprint_noop_when_all_already_linked():
     ]
     with _patch_ctx_query(ctx, responses):
         out = zh_graphql_ops.add_issues_to_sprint(ctx, "Sprint 7", [100])
-    # Zero successes + zero failures is `noop`; classifier maps zero-
-    # success-with-input-list-of-1 to "fail" because everything was
-    # inferred-failed. Both noop and fail are non-ok — assert that.
+        # Zero successes + zero failures is `noop`; classifier maps zero- success-with-input-list-of-1 to "fail" because everything
+        # was inferred-failed. Both noop and fail are non-ok — assert that.
     assert out["ok"] is False
     assert out["outcome"] in {"noop", "fail"}
 
@@ -534,9 +623,7 @@ def test_add_issues_to_sprint_missing_issue_short_circuits():
         {"data": {"issueByInfo": None}},
     ]
     with _patch_ctx_query(ctx, responses):
-        out = zh_graphql_ops.add_issues_to_sprint(
-            ctx, "Sprint 7", [100, 9999]
-        )
+        out = zh_graphql_ops.add_issues_to_sprint(ctx, "Sprint 7", [100, 9999])
     assert out["ok"] is False
     assert out["outcome"] == "fail"
     assert out["failed"] == [9999]
@@ -550,8 +637,6 @@ def test_add_issues_to_sprint_validates_inputs():
         zh_graphql_ops.add_issues_to_sprint(ctx, "Sprint 7", [100, -5])
 
 
-# --- remove_issues_from_sprint --------------------------------------------
-
 def test_remove_issues_from_sprint_happy_path():
     """All inputs absent from post-state → outcome=ok."""
     ctx = _ctx()
@@ -563,9 +648,7 @@ def test_remove_issues_from_sprint_happy_path():
         _remove_resp([200, 201]),
     ]
     with _patch_ctx_query(ctx, responses):
-        out = zh_graphql_ops.remove_issues_from_sprint(
-            ctx, "Sprint 7", [100, 101]
-        )
+        out = zh_graphql_ops.remove_issues_from_sprint(ctx, "Sprint 7", [100, 101])
     assert out["ok"] is True
     assert out["outcome"] == "ok"
     assert sorted(out["succeeded"]) == [100, 101]
@@ -583,9 +666,7 @@ def test_remove_issues_from_sprint_partial_failure():
         _remove_resp([101, 999]),
     ]
     with _patch_ctx_query(ctx, responses):
-        out = zh_graphql_ops.remove_issues_from_sprint(
-            ctx, "Sprint 7", [100, 101]
-        )
+        out = zh_graphql_ops.remove_issues_from_sprint(ctx, "Sprint 7", [100, 101])
     assert out["ok"] is False
     assert out["outcome"] == "partial"
     assert out["succeeded"] == [100]
@@ -600,11 +681,8 @@ def test_remove_issues_from_sprint_validates_inputs():
         zh_graphql_ops.remove_issues_from_sprint(ctx, "Sprint 7", [-1])
 
 
-# =============================================================================
-# Second-pass review fixes: #1, #2, #3, #8, #10
-# =============================================================================
+        # ---- #1: empty `sprints` array in mutation response -----------------------
 
-# ---- #1: empty `sprints` array in mutation response -----------------------
 
 def _remove_resp_empty_sprints() -> dict:
     """Mutation response anomaly: `sprints: []` despite the schema's
@@ -629,8 +707,7 @@ def _remove_resp_wrong_sprint(other_sprint_id: str = "sprint-OTHER") -> dict:
     }
 
 
-def _walked_issues_page(nodes: list[dict], *, has_next: bool = False,
-                        end_cursor: str | None = None) -> dict:
+def _walked_issues_page(nodes: list[dict], *, has_next: bool = False, end_cursor: str | None = None) -> dict:
     """Wrapper for the _walk_sprint_issues page query response."""
     return _sprint_issues_page(nodes, has_next=has_next, end_cursor=end_cursor)
 
@@ -656,9 +733,7 @@ def test_remove_walks_when_response_has_empty_sprints_array(monkeypatch):
         _walked_issues_page([_issue_node(101)]),
     ]
     with _patch_ctx_query(ctx, responses):
-        out = zh_graphql_ops.remove_issues_from_sprint(
-            ctx, "Sprint 7", [100, 101]
-        )
+        out = zh_graphql_ops.remove_issues_from_sprint(ctx, "Sprint 7", [100, 101])
     assert out["succeeded"] == [100]
     assert out["failed"] == [101]
     assert out["outcome"] == "partial"
@@ -677,9 +752,7 @@ def test_remove_walks_when_response_omits_target_sprint():
         _walked_issues_page([]),  # walk shows empty sprint
     ]
     with _patch_ctx_query(ctx, responses):
-        out = zh_graphql_ops.remove_issues_from_sprint(
-            ctx, "Sprint 7", [100]
-        )
+        out = zh_graphql_ops.remove_issues_from_sprint(ctx, "Sprint 7", [100])
     assert out["succeeded"] == [100]
     assert out["failed"] == []
     assert out["outcome"] == "ok"
@@ -687,7 +760,8 @@ def test_remove_walks_when_response_omits_target_sprint():
     assert "did not include sprint" in out["response_anomaly"].lower()
 
 
-# ---- #2: pagination_warning preserved from follow-up walk -----------------
+    # ---- #2: pagination_warning preserved from follow-up walk -----------------
+
 
 def test_remove_surfaces_pagination_warning_from_followup_walk():
     """Review #2: the walker's pagination_warning was discarded via `_,`.
@@ -726,9 +800,7 @@ def test_remove_surfaces_pagination_warning_from_followup_walk():
     }
     # The walk response has the first page full but cursor missing
     # while hasNextPage=true — should trip the stuck-cursor guard.
-    stuck_walk_page = _sprint_issues_page(
-        full_page, has_next=True, end_cursor=None
-    )
+    stuck_walk_page = _sprint_issues_page(full_page, has_next=True, end_cursor=None)
     responses = [
         _sprints_page([_sprint_node("sprint-7", "Sprint 7")]),
         _issue_by_info_resp(100),
@@ -736,20 +808,16 @@ def test_remove_surfaces_pagination_warning_from_followup_walk():
         stuck_walk_page,
     ]
     with _patch_ctx_query(ctx, responses):
-        out = zh_graphql_ops.remove_issues_from_sprint(
-            ctx, "Sprint 7", [100]
-        )
+        out = zh_graphql_ops.remove_issues_from_sprint(ctx, "Sprint 7", [100])
     assert out["pagination_warning"] is not None
     assert "cursor not advancing" in out["pagination_warning"].lower()
-    # SPEC: when the walker bails on stuck cursor / iteration cap, we
-    # only saw a partial post-state, so coverage isn't "full." The
-    # prior assertion (`inspected_full is True` here) pinned the
-    # round-2 regression — it's the canonical self-justifying bug-pin
-    # for this PR. Real spec: `inspected_full == (walk_warning is None)`.
+    # SPEC: when the walker bails on stuck cursor / iteration cap, we only saw a partial post-state, so coverage isn't "full." The prior assertion (`inspected_full is True` here) pinned the
+    # round-2 regression — it's the canonical self-justifying bug-pin for this PR. Real spec: `inspected_full == (walk_warning is None)`.
     assert out["inspected_full"] is False
 
 
-# ---- #3: filter still-attached nodes by repo (multi-repo workspace) -------
+    # ---- #3: filter still-attached nodes by repo (multi-repo workspace) -------
+
 
 def test_remove_filters_post_state_by_repo():
     """Review #3: a sibling-repo issue #42 in the sprint must NOT
@@ -759,34 +827,35 @@ def test_remove_filters_post_state_by_repo():
     responses = [
         _sprints_page([_sprint_node("sprint-7", "Sprint 7")]),
         _issue_by_info_resp(42),
-        # Post-state: 42 from acme/widgets is GONE, but 42 from
-        # acme/OTHER is still in the sprint. Pre-fix would think
-        # we failed to remove.
+        # Post-state: 42 from acme/widgets is GONE, but 42 from acme/OTHER is still in the sprint.
+        # Pre-fix would think we failed to remove.
         {
             "data": {
                 "removeIssuesFromSprints": {
-                    "sprints": [{
-                        "id": "sprint-7",
-                        "sprintIssues": {
-                            "nodes": [
-                                {"issue": {
-                                    "number": 42,
-                                    "repository": {
-                                        "ownerName": "acme",
-                                        "name": "OTHER",
+                    "sprints": [
+                        {
+                            "id": "sprint-7",
+                            "sprintIssues": {
+                                "nodes": [
+                                    {
+                                        "issue": {
+                                            "number": 42,
+                                            "repository": {
+                                                "ownerName": "acme",
+                                                "name": "OTHER",
+                                            },
+                                        }
                                     },
-                                }},
-                            ]
-                        },
-                    }]
+                                ]
+                            },
+                        }
+                    ]
                 }
             }
         },
     ]
     with _patch_ctx_query(ctx, responses):
-        out = zh_graphql_ops.remove_issues_from_sprint(
-            ctx, "Sprint 7", [42]
-        )
+        out = zh_graphql_ops.remove_issues_from_sprint(ctx, "Sprint 7", [42])
     assert out["succeeded"] == [42]
     assert out["failed"] == []
     assert out["outcome"] == "ok"
@@ -805,34 +874,37 @@ def test_remove_post_state_with_owner_case_difference():
         {
             "data": {
                 "removeIssuesFromSprints": {
-                    "sprints": [{
-                        "id": "sprint-7",
-                        "sprintIssues": {
-                            "nodes": [
-                                {"issue": {
-                                    "number": 42,
-                                    "repository": {
-                                        "ownerName": "ACME",
-                                        "name": "WIDGETS",
+                    "sprints": [
+                        {
+                            "id": "sprint-7",
+                            "sprintIssues": {
+                                "nodes": [
+                                    {
+                                        "issue": {
+                                            "number": 42,
+                                            "repository": {
+                                                "ownerName": "ACME",
+                                                "name": "WIDGETS",
+                                            },
+                                        }
                                     },
-                                }},
-                            ]
-                        },
-                    }]
+                                ]
+                            },
+                        }
+                    ]
                 }
             }
         },
     ]
     with _patch_ctx_query(ctx, responses):
-        out = zh_graphql_ops.remove_issues_from_sprint(
-            ctx, "Sprint 7", [42]
-        )
+        out = zh_graphql_ops.remove_issues_from_sprint(ctx, "Sprint 7", [42])
     # Same number + matching repo (case-insensitive) → still attached
     assert out["failed"] == [42]
     assert out["succeeded"] == []
 
 
-# ---- #8: filter add response by repo --------------------------------------
+    # ---- #8: filter add response by repo --------------------------------------
+
 
 def test_add_filters_response_links_by_repo():
     """Review #8: a sibling-repo link must NOT count as our success.
@@ -918,7 +990,8 @@ def test_add_does_not_count_only_sibling_repo_link_as_success():
     assert out["outcome"] == "fail"
 
 
-# ---- #10: dedup input at the boundary -------------------------------------
+    # ---- #10: dedup input at the boundary -------------------------------------
+
 
 def test_add_deduplicates_input_numbers():
     """Review #10: duplicate input numbers must collapse first-occurrence.
@@ -937,9 +1010,7 @@ def test_add_deduplicates_input_numbers():
         _add_resp([42, 43]),
     ]
     with _patch_ctx_query(ctx, responses):
-        out = zh_graphql_ops.add_issues_to_sprint(
-            ctx, "Sprint 7", [42, 42, 43]
-        )
+        out = zh_graphql_ops.add_issues_to_sprint(ctx, "Sprint 7", [42, 42, 43])
     # After dedup: `[42, 43]` and both succeed
     assert sorted(out["succeeded"]) == [42, 43]
     assert out["failed"] == []
@@ -958,17 +1029,11 @@ def test_remove_deduplicates_input_numbers():
         _remove_resp([]),
     ]
     with _patch_ctx_query(ctx, responses):
-        out = zh_graphql_ops.remove_issues_from_sprint(
-            ctx, "Sprint 7", [42, 43, 42]
-        )
+        out = zh_graphql_ops.remove_issues_from_sprint(ctx, "Sprint 7", [42, 43, 42])
     assert sorted(out["succeeded"]) == [42, 43]
     assert out["success_count"] == 2
     assert out["failed"] == []
 
-
-# =============================================================================
-# Third-pass review fixes: null-node walker + inspected_full SPEC
-# =============================================================================
 
 def test_walk_sprint_issues_raises_on_null_node():
     """`data.node = null` (deleted sprint / ACL revoked) must NOT
@@ -977,9 +1042,8 @@ def test_walk_sprint_issues_raises_on_null_node():
     input as removed.
     """
     ctx = _ctx()
-    with _patch_ctx_query(ctx, [{"data": {"node": None}}]):
-        with pytest.raises(zh_api.ZhApiError) as exc:
-            zh_graphql_ops._walk_sprint_issues(ctx, "sprint-deleted")
+    with _patch_ctx_query(ctx, [{"data": {"node": None}}]), pytest.raises(zh_api.ZhApiError) as exc:
+        zh_graphql_ops._walk_sprint_issues(ctx, "sprint-deleted")
     msg = str(exc.value).lower()
     assert "null" in msg
     assert "sprint-deleted" in msg
@@ -1003,9 +1067,7 @@ def test_remove_recovery_walker_null_node_surfaces_fail():
         {"data": {"node": None}},
     ]
     with _patch_ctx_query(ctx, responses):
-        out = zh_graphql_ops.remove_issues_from_sprint(
-            ctx, "Sprint 7", [100]
-        )
+        out = zh_graphql_ops.remove_issues_from_sprint(ctx, "Sprint 7", [100])
     assert out["ok"] is False
     assert out["outcome"] == "fail"
     assert out["succeeded"] == []
@@ -1052,9 +1114,7 @@ def test_remove_followup_walker_null_node_surfaces_fail():
         {"data": {"node": None}},
     ]
     with _patch_ctx_query(ctx, responses):
-        out = zh_graphql_ops.remove_issues_from_sprint(
-            ctx, "Sprint 7", [100]
-        )
+        out = zh_graphql_ops.remove_issues_from_sprint(ctx, "Sprint 7", [100])
     assert out["ok"] is False
     assert out["outcome"] == "fail"
     assert out["inspected_full"] is False
@@ -1073,22 +1133,14 @@ def test_remove_walk_warning_sets_inspected_full_false_in_recovery():
         # Anomaly: empty sprints array triggers recovery walk
         {"data": {"removeIssuesFromSprints": {"sprints": []}}},
         # Walker sees stuck cursor
-        _sprint_issues_page(
-            [_issue_node(100)], has_next=True, end_cursor=None
-        ),
+        _sprint_issues_page([_issue_node(100)], has_next=True, end_cursor=None),
     ]
     with _patch_ctx_query(ctx, responses):
-        out = zh_graphql_ops.remove_issues_from_sprint(
-            ctx, "Sprint 7", [100]
-        )
+        out = zh_graphql_ops.remove_issues_from_sprint(ctx, "Sprint 7", [100])
     assert out["pagination_warning"] is not None
     assert out["inspected_full"] is False
     assert out["response_anomaly"] is not None
 
-
-# =============================================================================
-# round-10 Pattern A: sprint mutations canonical shape + conservation
-# =============================================================================
 
 def test_add_issues_to_sprint_canonical_shape_keys_present():
     """Round-9 #6 / Round-10 Pattern A: every return from
@@ -1104,23 +1156,26 @@ def test_add_issues_to_sprint_canonical_shape_keys_present():
         _add_resp([100, 101]),
     ]
     with _patch_ctx_query(ctx, responses):
-        out = zh_graphql_ops.add_issues_to_sprint(
-            ctx, "Sprint 7", [100, 101]
-        )
+        out = zh_graphql_ops.add_issues_to_sprint(ctx, "Sprint 7", [100, 101])
     for k in (
-        "ok", "sprint_id", "sprint_name", "outcome",
-        "success_count", "failed_count", "succeeded", "failed",
-        "unaccounted", "partial_success_warning", "error",
+        "ok",
+        "sprint_id",
+        "sprint_name",
+        "outcome",
+        "success_count",
+        "failed_count",
+        "succeeded",
+        "failed",
+        "unaccounted",
+        "partial_success_warning",
+        "error",
     ):
         assert k in out, f"add_issues_to_sprint missing key {k!r}"
     # Trusted-path invariants.
     assert out["unaccounted"] == []
     assert out["partial_success_warning"] is None
     # Conservation invariant.
-    assert (
-        len(out["succeeded"]) + len(out["failed"]) + len(out["unaccounted"])
-        == 2
-    )
+    assert len(out["succeeded"]) + len(out["failed"]) + len(out["unaccounted"]) == 2
 
 
 def test_remove_issues_from_sprint_canonical_shape_keys_present():
@@ -1133,21 +1188,26 @@ def test_remove_issues_from_sprint_canonical_shape_keys_present():
         _remove_resp([]),
     ]
     with _patch_ctx_query(ctx, responses):
-        out = zh_graphql_ops.remove_issues_from_sprint(
-            ctx, "Sprint 7", [100, 101]
-        )
+        out = zh_graphql_ops.remove_issues_from_sprint(ctx, "Sprint 7", [100, 101])
     for k in (
-        "ok", "sprint_id", "sprint_name", "outcome",
-        "success_count", "failed_count", "succeeded", "failed",
-        "unaccounted", "inspected_full", "pagination_warning",
-        "response_anomaly", "partial_success_warning", "error",
+        "ok",
+        "sprint_id",
+        "sprint_name",
+        "outcome",
+        "success_count",
+        "failed_count",
+        "succeeded",
+        "failed",
+        "unaccounted",
+        "inspected_full",
+        "pagination_warning",
+        "response_anomaly",
+        "partial_success_warning",
+        "error",
     ):
         assert k in out, f"remove_issues_from_sprint missing key {k!r}"
     assert out["unaccounted"] == []
-    assert (
-        len(out["succeeded"]) + len(out["failed"]) + len(out["unaccounted"])
-        == 2
-    )
+    assert len(out["succeeded"]) + len(out["failed"]) + len(out["unaccounted"]) == 2
 
 
 def test_add_issues_to_sprint_sprint_not_found_unaccounted():
@@ -1159,15 +1219,10 @@ def test_add_issues_to_sprint_sprint_not_found_unaccounted():
         _sprints_page([_sprint_node("sprint-7", "Sprint 7")]),
     ]
     with _patch_ctx_query(ctx, responses):
-        out = zh_graphql_ops.add_issues_to_sprint(
-            ctx, "Sprint 99", [100, 101, 102]
-        )
+        out = zh_graphql_ops.add_issues_to_sprint(ctx, "Sprint 99", [100, 101, 102])
     assert out["ok"] is False
     assert out["unaccounted"] == [100, 101, 102]
-    assert (
-        len(out["succeeded"]) + len(out["failed"]) + len(out["unaccounted"])
-        == 3
-    )
+    assert len(out["succeeded"]) + len(out["failed"]) + len(out["unaccounted"]) == 3
 
 
 def test_add_issues_to_sprint_missing_issue_unaccounted_order_preserved():
@@ -1184,18 +1239,13 @@ def test_add_issues_to_sprint_missing_issue_unaccounted_order_preserved():
         {"data": {"issueByInfo": None}},
     ]
     with _patch_ctx_query(ctx, responses):
-        out = zh_graphql_ops.add_issues_to_sprint(
-            ctx, "Sprint 7", [100, 101, 9999]
-        )
+        out = zh_graphql_ops.add_issues_to_sprint(ctx, "Sprint 7", [100, 101, 9999])
     assert out["ok"] is False
     assert out["failed"] == [9999]
     # 100 and 101 resolved but weren't attempted; they're unaccounted
     # in input order.
     assert out["unaccounted"] == [100, 101]
-    assert (
-        len(out["succeeded"]) + len(out["failed"]) + len(out["unaccounted"])
-        == 3
-    )
+    assert len(out["succeeded"]) + len(out["failed"]) + len(out["unaccounted"]) == 3
 
 
 def test_remove_issues_from_sprint_partial_walk_unaccounted_matches_anomaly():
@@ -1233,38 +1283,22 @@ def test_remove_issues_from_sprint_partial_walk_unaccounted_matches_anomaly():
         }
     }
     # Walk bails on stuck cursor.
-    stuck_walk_page = _sprint_issues_page(
-        full_page, has_next=True, end_cursor=None
-    )
+    stuck_walk_page = _sprint_issues_page(full_page, has_next=True, end_cursor=None)
     responses = [
         _sprints_page([_sprint_node("sprint-7", "Sprint 7")]),
         _issue_by_info_resp(100),
-        _issue_by_info_resp(2050),       # in the walked page (succeeded)
-        _issue_by_info_resp(8888),       # NOT in walked page (unverified)
+        _issue_by_info_resp(2050),  # in the walked page (succeeded)
+        _issue_by_info_resp(8888),  # NOT in walked page (unverified)
         full_remove_resp,
         stuck_walk_page,
     ]
     with _patch_ctx_query(ctx, responses):
-        out = zh_graphql_ops.remove_issues_from_sprint(
-            ctx, "Sprint 7", [100, 2050, 8888]
-        )
+        out = zh_graphql_ops.remove_issues_from_sprint(ctx, "Sprint 7", [100, 2050, 8888])
     assert out["inspected_full"] is False
-    # 100 was in the initial 100-node response then bailed walk; depending
-    # on walker semantics may be in succeeded or unverified.
-    # 2050 was in the page; not in still_attached after de-dup? The
-    # walker re-emits the page so 2050 is still_attached → fails.
-    # 8888 was never reached → unaccounted.
-    # The precise allocation depends on the walker's reset behavior;
-    # what we pin: `unaccounted` non-empty AND the response_anomaly's
-    # count agrees with `len(unaccounted)`.
+    # 100 was in the initial 100-node response then bailed walk; depending on walker semantics may be in succeeded or unverified. 2050 was in the page; not in still_attached after de-dup? The walker re-emits the page so 2050 is still_attached → fails. 8888
+    # was never reached → unaccounted. The precise allocation depends on the walker's reset behavior; what we pin: `unaccounted` non-empty AND the response_anomaly's count agrees with `len(unaccounted)`.
     assert 8888 in out["unaccounted"]
     # Conservation invariant.
-    assert (
-        len(out["succeeded"]) + len(out["failed"]) + len(out["unaccounted"])
-        == 3
-    )
+    assert len(out["succeeded"]) + len(out["failed"]) + len(out["unaccounted"]) == 3
     # Round-10 Pattern B: text count derived from canonical field.
-    assert (
-        f"{len(out['unaccounted'])} input(s) un-verified"
-        in out["response_anomaly"]
-    )
+    assert f"{len(out['unaccounted'])} input(s) un-verified" in out["response_anomaly"]

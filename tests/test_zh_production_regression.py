@@ -16,20 +16,11 @@ demonstrating the runner-vs-snippet drift contrast.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
+
 from _bash_runner import run_zh_with_stubs
-
-
-# ===========================================================================
-# STRUCTURAL-GUARANTEE TESTS
-#
-# These tests demonstrate that the production-sourcing harness catches
-# the EXACT class of bug that round-4 missed for six review rounds.
-# Each one runs against production logic; if production drifts the
-# test fails, unlike the legacy snippet tests where the snippet drifts
-# along with production and the test stays green.
-# ===========================================================================
 
 
 def test_structural_guarantee_set_type_exits_2_not_1_on_partial() -> None:
@@ -45,10 +36,8 @@ def test_structural_guarantee_set_type_exits_2_not_1_on_partial() -> None:
     production exit code. If a future change reverts to `exit 1`
     (or any non-2), this fails.
     """
-    # Stub the entire pre-mutation pipeline so we land in the partial branch.
-    # cmd_set_type calls: load_config, get_repo_info, get_repo_id,
-    # get_workspace_id, zh_fetch_issue_types, zh_issue_type_id_from,
-    # zh_resolve_issue_id, then zh_graphql for the mutation.
+    # Stub the entire pre-mutation pipeline so we land in the partial branch. cmd_set_type calls: load_config, get_repo_info, get_repo_id, get_workspace_id,
+    # zh_fetch_issue_types, zh_issue_type_id_from, zh_resolve_issue_id, then zh_graphql for the mutation.
     stubs = r"""
         load_config() { :; }
         get_repo_info() { printf 'acme/widgets'; }
@@ -64,15 +53,11 @@ def test_structural_guarantee_set_type_exits_2_not_1_on_partial() -> None:
             printf '%s' '{"data":{"changeIssueTypeOfIssues":{"successCount":1,"failedIssues":[{"number":42}],"githubErrors":[]}}}'
         }
     """
-    r = run_zh_with_stubs(stubs, 'cmd_set_type 42 Epic')
+    r = run_zh_with_stubs(stubs, "cmd_set_type 42 Epic")
     assert r.returncode == 2, (
-        f"production cmd_set_type partial branch MUST exit 2 "
-        f"(round-6 #4); got rc={r.returncode}, "
-        f"stdout={r.stdout!r}, stderr={r.stderr!r}"
+        f"production cmd_set_type partial branch MUST exit 2 (round-6 #4); got rc={r.returncode}, stdout={r.stdout!r}, stderr={r.stderr!r}"
     )
-    assert "Partially applied" in r.stderr, (
-        f"expected 'Partially applied' warn on stderr, got {r.stderr!r}"
-    )
+    assert "Partially applied" in r.stderr, f"expected 'Partially applied' warn on stderr, got {r.stderr!r}"
 
 
 def test_structural_guarantee_create_normalizer_known_flags_align_with_case_arms() -> None:
@@ -88,32 +73,16 @@ def test_structural_guarantee_create_normalizer_known_flags_align_with_case_arms
     import re
     from pathlib import Path
 
-    zh_text = Path(__file__).resolve().parent.parent.joinpath("zh").read_text()
+    zh_text = (Path(__file__).resolve().parent.parent / "lib" / "create.sh").read_text()
 
-    # Find the cmd_create function body. The function spans from
-    # `cmd_create() {` to its matching closing brace at column 0.
-    #
-    # v1.9.2 round-2 (PR #27) finding #8: the prior `^cmd_create\(\)
-    # \{(.*?)\n^cmd_` anchor extended the match past any helper
-    # function (`_validate_create_args()`, etc.) inserted between
-    # cmd_create and the next `cmd_*` definition. The union of
-    # `_is_known_flag="true"` arms then included the helper's arms,
-    # which could mask a real cmd_create normalizer drift. Anchor on
-    # the closing brace at column 0 instead — that's where every
-    # `cmd_*() {` definition in this script ends.
+    # Find the cmd_create function body. The function spans from `cmd_create() {` to its matching closing brace at column 0.  v1.9.2 round-2 (PR #27) finding #8: the prior `^cmd_create\(\) \{(.*?)\n^cmd_` anchor extended the match past any helper function (`_validate_create_args()`, etc.) inserted between cmd_create and the next `cmd_*` definition. The union of
+    # `_is_known_flag="true"` arms then included the helper's arms, which could mask a real cmd_create normalizer drift. Anchor on the closing brace at column 0 instead — that's where every `cmd_*() {` definition in this script ends.  Post-lib-split: cmd_create lives in `lib/create.sh` (the monolithic `zh` script now only sources it).
     m = re.search(r"^cmd_create\(\) \{\n(.*?)\n\}\n", zh_text, re.S | re.M)
-    assert m, "could not locate cmd_create() in zh (column-0 closing brace)"
+    assert m, "could not locate cmd_create() in lib/create.sh (column-0 closing brace)"
     body = m.group(1)
 
-    # The known-flag list lives inside a `case "$_norm_flag" in ... esac`
-    # block. v1.9.2 round-1 (PR #27) finding #6: there are now TWO
-    # arms in this case block — one for value-flags and one for the
-    # round-7 #2 boolean-flag rejection (`--json|--quiet|--stdin`).
-    # The original `re.search` only matched the first arm, so a
-    # future maintainer adding `--dry-run` to the boolean arm without
-    # a case arm would slip through silently — exactly the round-7
-    # #1 bug pattern this structural test is meant to prevent. Use
-    # `re.finditer` and union every arm.
+    # The known-flag list lives inside a `case "$_norm_flag" in ... esac` block. v1.9.2 round-1 (PR #27) finding #6: there are now TWO arms in this case block — one for value-flags and one for the round-7 #2 boolean-flag rejection (`--json|--quiet|--stdin`). The original `re.search` only matched the
+    # first arm, so a future maintainer adding `--dry-run` to the boolean arm without a case arm would slip through silently — exactly the round-7 #1 bug pattern this structural test is meant to prevent. Use `re.finditer` and union every arm.
     known: set[str] = set()
     for norm_m in re.finditer(
         r'\n\s*([^)\n]+)\)\s*\n\s*_is_known_flag="true"',
@@ -123,15 +92,10 @@ def test_structural_guarantee_create_normalizer_known_flags_align_with_case_arms
             tok = tok.strip()
             if tok.startswith("-"):
                 known.add(tok)
-    assert known, (
-        "could not find ANY cmd_create _is_known_flag arm; the "
-        "harness needs an update if cmd_create restructured the "
-        "normalizer."
-    )
+    assert known, "could not find ANY cmd_create _is_known_flag arm; the harness needs an update if cmd_create restructured the normalizer."
 
-    # Now collect every long flag the main case arms accept. Look for
-    # each `arm_pattern)` block and extract long-form `--flag` tokens.
-    # The main case arms start after the normalizer's closing esac.
+    # Now collect every long flag the main case arms accept. Look for each `arm_pattern)` block and extract long-form `--flag`
+    # tokens. The main case arms start after the normalizer's closing esac.
     main_case_m = re.search(
         r'esac\n\s*if \[\[ -n "\$title" \|\|.*?\n\s*case "\$1" in(.*?)\n\s*esac\n',
         body,
@@ -141,7 +105,7 @@ def test_structural_guarantee_create_normalizer_known_flags_align_with_case_arms
     main_case_text = main_case_m.group(1)
     # Pull every long flag that appears as a case-arm pattern.
     case_arm_flags = set()
-    for arm_m in re.finditer(r'(?:^|\s)((?:-[a-z]\|)?--[a-z-]+(?:\|--[a-z-]+)*)\)', main_case_text):
+    for arm_m in re.finditer(r"(?:^|\s)((?:-[a-z]\|)?--[a-z-]+(?:\|--[a-z-]+)*)\)", main_case_text):
         for tok in arm_m.group(1).split("|"):
             tok = tok.strip()
             if tok.startswith("--"):
@@ -157,15 +121,7 @@ def test_structural_guarantee_create_normalizer_known_flags_align_with_case_arms
     )
 
 
-# ===========================================================================
-# ROUND-7 FINDING CLOSURES
-#
-# Each test below pins the fix for one of the 15 findings. Tests are
-# numbered to match the review.
-# ===========================================================================
-
-
-# ---- Finding #1: --description normalizer-no-case-arm ----------------------
+    # ---- Finding #1: --description normalizer-no-case-arm ----------------------
 
 
 def test_round7_f1_description_long_form_is_accepted_as_body() -> None:
@@ -178,17 +134,8 @@ def test_round7_f1_description_long_form_is_accepted_as_body() -> None:
 
     Fix: add `--description` as an alias to the `-b|--body` arm.
     """
-    # Strategy: invoke cmd_create with stubs that capture the body
-    # value the function decides to use. Easiest is to stub the
-    # downstream zh_graphql mutation and inspect the variables it
-    # receives. But cmd_create is long; a lighter check just
-    # introspects the parsed body via a stub that fails after parsing
-    # so we capture the local `body` var. Use a stub that prints the
-    # title+body envelope and exits before networking.
-    #
-    # Cleanest: stub everything cmd_create touches up to the JSON
-    # emit (createIssue mutation), have zh_graphql echo back what
-    # was requested, then read stdout.
+    # Strategy: invoke cmd_create with stubs that capture the body value the function decides to use. Easiest is to stub the downstream zh_graphql mutation and inspect the variables it receives. But cmd_create is long; a lighter check just introspects the parsed body via a stub that fails after parsing so we
+    # capture the local `body` var. Use a stub that prints the title+body envelope and exits before networking.  Cleanest: stub everything cmd_create touches up to the JSON emit (createIssue mutation), have zh_graphql echo back what was requested, then read stdout.
     stubs = r"""
         load_config() { :; }
         get_repo_info() { printf 'acme/widgets'; }
@@ -219,7 +166,7 @@ def test_round7_f1_description_long_form_is_accepted_as_body() -> None:
     r = run_zh_with_stubs(
         stubs,
         'cmd_create "$@"',
-        args=["Real title", '--description=Long body text', '-t', 'Bug'],
+        args=["Real title", "--description=Long body text", "-t", "Bug"],
     )
     # The test passes iff the create mutation received the body.
     assert "STUB_CREATE_BODY:Long body text" in r.stderr, (
@@ -262,19 +209,13 @@ def test_round7_f1_description_long_form_does_not_steal_title() -> None:
     r = run_zh_with_stubs(
         stubs,
         'cmd_create "$@"',
-        args=['--description=My body', '-t', 'Bug', 'Real title'],
+        args=["--description=My body", "-t", "Bug", "Real title"],
     )
-    assert "STUB_TITLE:Real title" in r.stderr, (
-        f"title should be 'Real title'; --description= leaked as title. "
-        f"stderr={r.stderr!r}"
-    )
-    assert "STUB_BODY:My body" in r.stderr, (
-        f"body should be 'My body'; --description= value was dropped. "
-        f"stderr={r.stderr!r}"
-    )
+    assert "STUB_TITLE:Real title" in r.stderr, f"title should be 'Real title'; --description= leaked as title. stderr={r.stderr!r}"
+    assert "STUB_BODY:My body" in r.stderr, f"body should be 'My body'; --description= value was dropped. stderr={r.stderr!r}"
 
 
-# ---- Finding #2: boolean flags --json=value / --quiet=value / --stdin=value -
+    # ---- Finding #2: boolean flags --json=value / --quiet=value / --stdin=value -
 
 
 def test_round7_f2_json_equals_value_is_rejected() -> None:
@@ -301,16 +242,11 @@ def test_round7_f2_json_equals_value_is_rejected() -> None:
     r = run_zh_with_stubs(
         stubs,
         'cmd_create "$@"',
-        args=['--json=true', 'Real title', '-t', 'Bug'],
+        args=["--json=true", "Real title", "-t", "Bug"],
     )
     # Production should reject; non-zero exit + a clear error on stderr.
-    assert r.returncode != 0, (
-        f"--json=true should be rejected (boolean flag with value); "
-        f"got rc={r.returncode}, stdout={r.stdout!r}"
-    )
-    assert ("boolean" in r.stderr.lower()
-            or "does not accept" in r.stderr.lower()
-            or "no value" in r.stderr.lower()), (
+    assert r.returncode != 0, f"--json=true should be rejected (boolean flag with value); got rc={r.returncode}, stdout={r.stdout!r}"
+    assert "boolean" in r.stderr.lower() or "does not accept" in r.stderr.lower() or "no value" in r.stderr.lower(), (
         f"expected clear error explaining --json is boolean, got: {r.stderr!r}"
     )
 
@@ -338,16 +274,11 @@ def test_round7_f2_quiet_equals_value_is_rejected() -> None:
     r = run_zh_with_stubs(
         stubs,
         'cmd_create "$@"',
-        args=['--quiet=anything', 'Title', '-t', 'Bug'],
+        args=["--quiet=anything", "Title", "-t", "Bug"],
     )
-    assert r.returncode != 0, (
-        f"--quiet=anything should be rejected; got rc={r.returncode}"
-    )
-    assert ("boolean" in r.stderr.lower()
-            or "does not accept" in r.stderr.lower()
-            or "no value" in r.stderr.lower()), (
-        f"expected clear 'boolean flag' rejection for --quiet=, got: "
-        f"{r.stderr!r}"
+    assert r.returncode != 0, f"--quiet=anything should be rejected; got rc={r.returncode}"
+    assert "boolean" in r.stderr.lower() or "does not accept" in r.stderr.lower() or "no value" in r.stderr.lower(), (
+        f"expected clear 'boolean flag' rejection for --quiet=, got: {r.stderr!r}"
     )
 
 
@@ -369,16 +300,11 @@ def test_round7_f2_stdin_equals_value_is_rejected() -> None:
     r = run_zh_with_stubs(
         stubs,
         'cmd_create "$@"',
-        args=['--stdin=ignored', 'Title', '-t', 'Bug'],
+        args=["--stdin=ignored", "Title", "-t", "Bug"],
     )
-    assert r.returncode != 0, (
-        f"--stdin=ignored should be rejected; got rc={r.returncode}"
-    )
-    assert ("boolean" in r.stderr.lower()
-            or "does not accept" in r.stderr.lower()
-            or "no value" in r.stderr.lower()), (
-        f"expected clear 'boolean flag' rejection for --stdin=, got: "
-        f"{r.stderr!r}"
+    assert r.returncode != 0, f"--stdin=ignored should be rejected; got rc={r.returncode}"
+    assert "boolean" in r.stderr.lower() or "does not accept" in r.stderr.lower() or "no value" in r.stderr.lower(), (
+        f"expected clear 'boolean flag' rejection for --stdin=, got: {r.stderr!r}"
     )
 
 
@@ -401,19 +327,16 @@ def test_round7_f2_json_bare_still_works() -> None:
     r = run_zh_with_stubs(
         stubs,
         'cmd_create "$@"',
-        args=['Title', '-t', 'Bug', '-b', 'body', '--json'],
+        args=["Title", "-t", "Bug", "-b", "body", "--json"],
     )
-    assert r.returncode == 0, (
-        f"bare --json should still work; got rc={r.returncode}, "
-        f"stderr={r.stderr!r}"
-    )
+    assert r.returncode == 0, f"bare --json should still work; got rc={r.returncode}, stderr={r.stderr!r}"
     # The JSON emit should be on stdout (production uses jq's default
     # multi-line pretty format, so parse the full stdout as one doc).
     payload = json.loads(r.stdout.strip())
     assert payload["number"] == 4242
 
 
-# ---- Finding #3 & #4: estimate_requested in MCP create_issue & _planning ---
+    # ---- Finding #3 & #4: estimate_requested in MCP create_issue & _planning ---
 
 
 def test_round7_f3_create_issue_propagates_estimate_requested() -> None:
@@ -432,20 +355,23 @@ def test_round7_f3_create_issue_propagates_estimate_requested() -> None:
     include estimate_requested.
     """
     from unittest.mock import patch
+
     import mcp_server
 
-    fake_json = json.dumps({
-        "number": 4242,
-        "url": "https://example/4242",
-        "title": "T",
-        "type": "Bug",
-        "pipeline": None,
-        "estimate": None,
-        "estimate_requested": 5,
-        "parent": None,
-        "priority": None,
-        "priority_requested": None,
-    })
+    fake_json = json.dumps(
+        {
+            "number": 4242,
+            "url": "https://example/4242",
+            "title": "T",
+            "type": "Bug",
+            "pipeline": None,
+            "estimate": None,
+            "estimate_requested": 5,
+            "parent": None,
+            "priority": None,
+            "priority_requested": None,
+        }
+    )
 
     fake_run_result = {
         "ok": True,
@@ -454,22 +380,19 @@ def test_round7_f3_create_issue_propagates_estimate_requested() -> None:
         "exit_code": 0,
     }
     with patch.object(mcp_server, "_run_zh", return_value=fake_run_result):
-        with patch.object(mcp_server, "_similarity_repo",
-                          return_value=("acme/widgets", None)):
-            with patch("similarity.check_duplicate",
-                       return_value={"recommendation": "ok", "matches": []}):
+        with patch.object(mcp_server, "_similarity_repo", return_value=("acme/widgets", None)):
+            with patch("similarity.check_duplicate", return_value={"recommendation": "ok", "matches": []}):
                 out = mcp_server.create_issue(
-                    title="T", body="b", type="Bug", pipeline="",
+                    title="T",
+                    body="b",
+                    type="Bug",
+                    pipeline="",
                     skip_duplicate_check=True,
                 )
-    assert "estimate_requested" in out, (
-        f"create_issue must propagate estimate_requested (round-7 #3); "
-        f"got keys: {sorted(out.keys())!r}"
-    )
+    assert "estimate_requested" in out, f"create_issue must propagate estimate_requested (round-7 #3); got keys: {sorted(out.keys())!r}"
     assert out["estimate_requested"] == 5
-    # The three-state contract: estimate=None + estimate_requested=5
-    # means "asked, but mutation lost it". An agent must be able to
-    # detect this.
+    # The three-state contract: estimate=None + estimate_requested=5 means "asked, but mutation lost
+    # it". An agent must be able to detect this.
     assert out["estimate"] is None
 
 
@@ -481,20 +404,23 @@ def test_round7_f4_planning_create_propagates_estimate_requested() -> None:
     estimate_requested but the Python wrapper drops it.
     """
     from unittest.mock import patch
+
     import mcp_server
 
-    fake_json = json.dumps({
-        "number": 4242,
-        "url": "https://example/4242",
-        "title": "T",
-        "type": "Epic",
-        "pipeline": None,
-        "estimate": None,
-        "estimate_requested": 5,
-        "parent": None,
-        "priority": None,
-        "priority_requested": None,
-    })
+    fake_json = json.dumps(
+        {
+            "number": 4242,
+            "url": "https://example/4242",
+            "title": "T",
+            "type": "Epic",
+            "pipeline": None,
+            "estimate": None,
+            "estimate_requested": 5,
+            "parent": None,
+            "priority": None,
+            "priority_requested": None,
+        }
+    )
 
     fake_run_result = {
         "ok": True,
@@ -503,21 +429,18 @@ def test_round7_f4_planning_create_propagates_estimate_requested() -> None:
         "exit_code": 0,
     }
     with patch.object(mcp_server, "_run_zh", return_value=fake_run_result):
-        with patch.object(mcp_server, "_similarity_repo",
-                          return_value=("acme/widgets", None)):
-            with patch("similarity.check_duplicate",
-                       return_value={"recommendation": "ok", "matches": []}):
+        with patch.object(mcp_server, "_similarity_repo", return_value=("acme/widgets", None)):
+            with patch("similarity.check_duplicate", return_value={"recommendation": "ok", "matches": []}):
                 out = mcp_server.epic_create(
-                    title="T", estimate="5", skip_duplicate_check=True,
+                    title="T",
+                    estimate="5",
+                    skip_duplicate_check=True,
                 )
-    assert "estimate_requested" in out, (
-        f"_planning_create must propagate estimate_requested (round-7 #4); "
-        f"got keys: {sorted(out.keys())!r}"
-    )
+    assert "estimate_requested" in out, f"_planning_create must propagate estimate_requested (round-7 #4); got keys: {sorted(out.keys())!r}"
     assert out["estimate_requested"] == 5
 
 
-# ---- Finding #5: cmd_set_type bare zh_graphql under set -e ----------------
+    # ---- Finding #5: cmd_set_type bare zh_graphql under set -e ----------------
 
 
 def test_round7_f5_set_type_envelope_survives_zh_graphql_error() -> None:
@@ -543,24 +466,16 @@ def test_round7_f5_set_type_envelope_survives_zh_graphql_error() -> None:
         zh_issue_type_id_from() { printf 'tid-epic'; }
         zh_issue_type_names_from() { printf 'Epic'; }
         zh_resolve_issue_id() { printf 'issue-gid-42'; }
-        # Simulate the real error path: print an error to stderr and
-        # exit 1. Without the fail-soft envelope at line 3537, cmd_set_type
-        # would die here under set -e. With the fix, it captures empty
-        # response and falls through to a clear error.
+        # Simulate the real error path: print an error to stderr and exit 1. Without the fail-soft envelope at line 3537, cmd_set_type would die here
+        # under set -e. With the fix, it captures empty response and falls through to a clear error.
         zh_graphql() {
             echo "Error: ZenHub API error: rate-limited" >&2
             exit 1
         }
     """
-    r = run_zh_with_stubs(stubs, 'cmd_set_type 42 Epic')
-    # The function must reach its own diagnostic, not abort silently
-    # under set -e before producing a cmd_set_type-level error. The
-    # fix is the capture-and-branch envelope; the cmd_set_type-level
-    # error includes the literal "Failed to set type of #42" wording.
-    # Pre-fix, this assertion fails: the bare `response=$(zh_graphql)`
-    # exits the subshell with status 1, the outer assignment carries
-    # 1, and set -e aborts BEFORE the error/warn lines run, so the
-    # only stderr content is the raw stub `rate-limited` chatter.
+    r = run_zh_with_stubs(stubs, "cmd_set_type 42 Epic")
+    # The function must reach its own diagnostic, not abort silently under set -e before producing a cmd_set_type-level error. The fix is the capture-and-branch envelope; the cmd_set_type-level error includes the literal "Failed to set type of #42" wording. Pre-fix, this assertion
+    # fails: the bare `response=$(zh_graphql)` exits the subshell with status 1, the outer assignment carries 1, and set -e aborts BEFORE the error/warn lines run, so the only stderr content is the raw stub `rate-limited` chatter.
     assert r.returncode != 0, "expected non-zero on transient .errors"
     assert "Failed to set type of #42" in r.stderr, (
         f"cmd_set_type aborted under set -e instead of reaching its "
@@ -570,7 +485,7 @@ def test_round7_f5_set_type_envelope_survives_zh_graphql_error() -> None:
     )
 
 
-# ---- Finding #6: cmd_hierarchy_create normalizer is unconditional ---------
+    # ---- Finding #6: cmd_hierarchy_create normalizer is unconditional ---------
 
 
 def test_round7_f6_hierarchy_create_does_not_mangle_literal_title() -> None:
@@ -621,10 +536,7 @@ def test_round7_f6_hierarchy_create_does_not_mangle_literal_title() -> None:
     )
     # The title that cmd_create receives must be the literal string,
     # not `--rotate` (the post-mangle result).
-    assert "TITLE:--rotate=enabled fails on retry" in r.stderr, (
-        f"cmd_hierarchy_create mangled the title (round-7 #6). "
-        f"stderr={r.stderr!r}"
-    )
+    assert "TITLE:--rotate=enabled fails on retry" in r.stderr, f"cmd_hierarchy_create mangled the title (round-7 #6). stderr={r.stderr!r}"
 
 
 def test_round7_f6_hierarchy_create_still_normalizes_real_flags() -> None:
@@ -652,13 +564,10 @@ def test_round7_f6_hierarchy_create_still_normalizes_real_flags() -> None:
         'cmd_hierarchy_create "$@"',
         args=["Epic", "epic", "My Title", "--description=Long body"],
     )
-    assert "BODY:Long body" in r.stderr, (
-        f"cmd_hierarchy_create lost the --description= value. "
-        f"stderr={r.stderr!r}"
-    )
+    assert "BODY:Long body" in r.stderr, f"cmd_hierarchy_create lost the --description= value. stderr={r.stderr!r}"
 
 
-# ---- Finding #7: planning_create blocked-path shape -----------------------
+    # ---- Finding #7: planning_create blocked-path shape -----------------------
 
 
 def test_round7_f7_initiative_create_blocked_response_no_keyerror() -> None:
@@ -672,6 +581,7 @@ def test_round7_f7_initiative_create_blocked_response_no_keyerror() -> None:
     are present (the runtime-safe option).
     """
     from unittest.mock import patch
+
     import mcp_server
 
     blocked_dup = {
@@ -680,41 +590,32 @@ def test_round7_f7_initiative_create_blocked_response_no_keyerror() -> None:
         "hard_threshold": 0.7,
         "matches": [{"number": 100, "similarity": 0.85}],
     }
-    with patch.object(mcp_server, "_similarity_repo",
-                      return_value=("acme/widgets", None)):
+    with patch.object(mcp_server, "_similarity_repo", return_value=("acme/widgets", None)):
         with patch("similarity.check_duplicate", return_value=blocked_dup):
             out = mcp_server.initiative_create(
-                title="Auth redesign", description="seed dup",
+                title="Auth redesign",
+                description="seed dup",
             )
-    # Per round-7 #7 fix: every key the docstring promises must be
-    # present (as None) even on the blocked path. Round-3 #3 only
-    # added `epic_number` to the alias for the blocked path; this
-    # test extends that to the documented contract.
+            # Per round-7 #7 fix: every key the docstring promises must be present (as None) even on the blocked path. Round-3 #3 only added `epic_number`
+            # to the alias for the blocked path; this test extends that to the documented contract.
     assert out["blocked"] is True
-    # v1.9.2 round-1 (PR #27) finding #12: assert the full
-    # documented key set the create_issue docstring promises, not
-    # just the first six. A regression dropping estimate_requested
-    # / priority / priority_requested / raw / stderr from the
-    # blocked-path dict is exactly the contract-drift family F7
-    # exists to pin.
-    # Non-stderr scalar keys: None placeholder. `raw` is "" so json.loads
-    # would raise (round-1 #11 noted this; we keep raw="" rather than
-    # returning fake JSON because the blocked path has no real raw
-    # output to surface). `stderr` carries the refusal message and is
-    # always non-empty by design — just assert the key is present.
-    for key in ("number", "url", "type", "pipeline", "parent",
-                "estimate", "estimate_requested",
-                "priority", "priority_requested"):
+    # v1.9.2 round-1 (PR #27) finding #12: assert the full documented key set the create_issue docstring promises, not just the first six. A regression dropping estimate_requested / priority / priority_requested / raw / stderr from the blocked-path dict is exactly the contract-drift family F7 exists to pin. Non-stderr scalar keys: None
+    # placeholder. `raw` is "" so json.loads would raise (round-1 #11 noted this; we keep raw="" rather than returning fake JSON because the blocked path has no real raw output to surface). `stderr` carries the refusal message and is always non-empty by design — just assert the key is present.
+    for key in (
+        "number",
+        "url",
+        "type",
+        "pipeline",
+        "parent",
+        "estimate",
+        "estimate_requested",
+        "priority",
+        "priority_requested",
+    ):
         assert key in out, f"blocked dict missing {key!r}"
-        assert out[key] is None, (
-            f"key {key!r} should be None on blocked path, got {out[key]!r}"
-        )
-    assert "raw" in out and out["raw"] == "", (
-        f"blocked raw must be empty string, got {out.get('raw')!r}"
-    )
-    assert "stderr" in out and out["stderr"], (
-        f"blocked stderr must carry the refusal message"
-    )
+        assert out[key] is None, f"key {key!r} should be None on blocked path, got {out[key]!r}"
+    assert "raw" in out and out["raw"] == "", f"blocked raw must be empty string, got {out.get('raw')!r}"
+    assert out.get("stderr"), "blocked stderr must carry the refusal message"
 
 
 def _assert_blocked_response_full_shape(out: dict) -> None:
@@ -728,19 +629,21 @@ def _assert_blocked_response_full_shape(out: dict) -> None:
     """
     assert out["blocked"] is True
     # Non-stderr scalar keys: None placeholder.
-    for key in ("number", "url", "type", "pipeline", "parent",
-                "estimate", "estimate_requested",
-                "priority", "priority_requested"):
+    for key in (
+        "number",
+        "url",
+        "type",
+        "pipeline",
+        "parent",
+        "estimate",
+        "estimate_requested",
+        "priority",
+        "priority_requested",
+    ):
         assert key in out, f"blocked dict missing {key!r}"
-        assert out[key] is None, (
-            f"key {key!r} should be None on blocked path, got {out[key]!r}"
-        )
-    assert "raw" in out and out["raw"] == "", (
-        f"blocked raw must be empty string, got {out.get('raw')!r}"
-    )
-    assert "stderr" in out and out["stderr"], (
-        "blocked stderr must carry the refusal message"
-    )
+        assert out[key] is None, f"key {key!r} should be None on blocked path, got {out[key]!r}"
+    assert "raw" in out and out["raw"] == "", f"blocked raw must be empty string, got {out.get('raw')!r}"
+    assert out.get("stderr"), "blocked stderr must carry the refusal message"
 
 
 def test_round7_f7_project_create_blocked_response_no_keyerror() -> None:
@@ -750,6 +653,7 @@ def test_round7_f7_project_create_blocked_response_no_keyerror() -> None:
     initiative test.
     """
     from unittest.mock import patch
+
     import mcp_server
 
     blocked_dup = {
@@ -758,11 +662,11 @@ def test_round7_f7_project_create_blocked_response_no_keyerror() -> None:
         "hard_threshold": 0.7,
         "matches": [{"number": 100, "similarity": 0.9}],
     }
-    with patch.object(mcp_server, "_similarity_repo",
-                      return_value=("acme/widgets", None)):
+    with patch.object(mcp_server, "_similarity_repo", return_value=("acme/widgets", None)):
         with patch("similarity.check_duplicate", return_value=blocked_dup):
             out = mcp_server.project_create(
-                title="X", description="y",
+                title="X",
+                description="y",
             )
     _assert_blocked_response_full_shape(out)
 
@@ -774,6 +678,7 @@ def test_round7_f7_subtask_create_blocked_response_no_keyerror() -> None:
     initiative test.
     """
     from unittest.mock import patch
+
     import mcp_server
 
     blocked_dup = {
@@ -782,16 +687,16 @@ def test_round7_f7_subtask_create_blocked_response_no_keyerror() -> None:
         "hard_threshold": 0.7,
         "matches": [{"number": 100, "similarity": 0.9}],
     }
-    with patch.object(mcp_server, "_similarity_repo",
-                      return_value=("acme/widgets", None)):
+    with patch.object(mcp_server, "_similarity_repo", return_value=("acme/widgets", None)):
         with patch("similarity.check_duplicate", return_value=blocked_dup):
             out = mcp_server.subtask_create(
-                title="X", description="y",
+                title="X",
+                description="y",
             )
     _assert_blocked_response_full_shape(out)
 
 
-# ---- Finding #8: set_issue_type empty issue_type omits partial_applied -----
+    # ---- Finding #8: set_issue_type empty issue_type omits partial_applied -----
 
 
 def test_round7_f8_set_issue_type_validation_includes_partial_applied() -> None:
@@ -802,10 +707,7 @@ def test_round7_f8_set_issue_type_validation_includes_partial_applied() -> None:
 
     out = mcp_server.set_issue_type(number=42, issue_type="")
     assert out["ok"] is False
-    assert "partial_applied" in out, (
-        f"validation early-return must include partial_applied "
-        f"(round-7 #8); got {sorted(out.keys())!r}"
-    )
+    assert "partial_applied" in out, f"validation early-return must include partial_applied (round-7 #8); got {sorted(out.keys())!r}"
     assert out["partial_applied"] is False
 
 
@@ -818,7 +720,7 @@ def test_round7_f8_set_issue_type_whitespace_only_includes_partial_applied() -> 
     assert out["partial_applied"] is False
 
 
-# ---- Finding #9: set_issue_type docstring must list partial_applied --------
+    # ---- Finding #9: set_issue_type docstring must list partial_applied --------
 
 
 def test_round7_f9_set_issue_type_docstring_documents_partial_applied() -> None:
@@ -826,13 +728,7 @@ def test_round7_f9_set_issue_type_docstring_documents_partial_applied() -> None:
     import mcp_server
 
     doc = mcp_server.set_issue_type.__doc__ or ""
-    assert "partial_applied" in doc, (
-        f"set_issue_type docstring must mention partial_applied "
-        f"(round-7 #9); current doc: {doc!r}"
-    )
-
-
-# ---- Finding #10: _planning_add/remove_children surface partial_applied ----
+    assert "partial_applied" in doc, f"set_issue_type docstring must mention partial_applied (round-7 #9); current doc: {doc!r}"
 
 
 def test_round7_f10_planning_add_children_surfaces_partial() -> None:
@@ -842,6 +738,7 @@ def test_round7_f10_planning_add_children_surfaces_partial() -> None:
     retries — double-adding the issues that did succeed.
     """
     from unittest.mock import patch
+
     import mcp_server
 
     fake_result = {
@@ -852,18 +749,17 @@ def test_round7_f10_planning_add_children_surfaces_partial() -> None:
     }
     with patch.object(mcp_server, "_run_zh", return_value=fake_result):
         out = mcp_server.epic_add_children(
-            epic_number=42, issue_numbers=[100, 999],
+            epic_number=42,
+            issue_numbers=[100, 999],
         )
-    assert "partial_applied" in out, (
-        f"_planning_add_children must surface partial_applied on "
-        f"exit_code==2 (round-7 #10); got {sorted(out.keys())!r}"
-    )
+    assert "partial_applied" in out, f"_planning_add_children must surface partial_applied on exit_code==2 (round-7 #10); got {sorted(out.keys())!r}"
     assert out["partial_applied"] is True
 
 
 def test_round7_f10_planning_remove_children_surfaces_partial() -> None:
     """Symmetric pin for remove."""
     from unittest.mock import patch
+
     import mcp_server
 
     fake_result = {
@@ -874,7 +770,8 @@ def test_round7_f10_planning_remove_children_surfaces_partial() -> None:
     }
     with patch.object(mcp_server, "_run_zh", return_value=fake_result):
         out = mcp_server.epic_remove_children(
-            epic_number=42, issue_numbers=[100, 999],
+            epic_number=42,
+            issue_numbers=[100, 999],
         )
     assert "partial_applied" in out
     assert out["partial_applied"] is True
@@ -889,6 +786,7 @@ def test_round7_f10_planning_add_children_clean_success_partial_false() -> None:
     sentinel to credit `added` as non-empty.
     """
     from unittest.mock import patch
+
     import mcp_server
 
     fake_result = {
@@ -900,7 +798,8 @@ def test_round7_f10_planning_add_children_clean_success_partial_false() -> None:
     }
     with patch.object(mcp_server, "_run_zh", return_value=fake_result):
         out = mcp_server.epic_add_children(
-            epic_number=42, issue_numbers=[100, 101],
+            epic_number=42,
+            issue_numbers=[100, 101],
         )
     assert out["partial_applied"] is False
     assert out["ok"] is True
@@ -916,6 +815,7 @@ def test_v193_planning_add_children_noop_returns_empty_added() -> None:
     actually moved.
     """
     from unittest.mock import patch
+
     import mcp_server
 
     fake_result = {
@@ -927,23 +827,13 @@ def test_v193_planning_add_children_noop_returns_empty_added() -> None:
     }
     with patch.object(mcp_server, "_run_zh", return_value=fake_result):
         out = mcp_server.epic_add_children(
-            epic_number=42, issue_numbers=[100, 101],
+            epic_number=42,
+            issue_numbers=[100, 101],
         )
-    assert out["ok"] is True, (
-        f"noop is idempotent success (bash round-4 #5 / wrapper round-5 #1); "
-        f"got ok={out['ok']!r}"
-    )
-    assert out["outcome"] == "noop", (
-        f"noop sentinel must propagate to outcome; got {out!r}"
-    )
-    assert out["added"] == [], (
-        f"noop MUST NOT credit children as added; got added={out['added']!r} "
-        f"(this is v1.9.3 pattern-sweep finding #1)"
-    )
-    assert out["added_requested"] == [100, 101], (
-        f"added_requested keeps the input list always; "
-        f"got {out['added_requested']!r}"
-    )
+    assert out["ok"] is True, f"noop is idempotent success (bash round-4 #5 / wrapper round-5 #1); got ok={out['ok']!r}"
+    assert out["outcome"] == "noop", f"noop sentinel must propagate to outcome; got {out!r}"
+    assert out["added"] == [], f"noop MUST NOT credit children as added; got added={out['added']!r} (this is v1.9.3 pattern-sweep finding #1)"
+    assert out["added_requested"] == [100, 101], f"added_requested keeps the input list always; got {out['added_requested']!r}"
 
 
 def test_v193_planning_remove_children_noop_returns_empty_removed() -> None:
@@ -952,6 +842,7 @@ def test_v193_planning_remove_children_noop_returns_empty_removed() -> None:
     the bash exit is 0 for idempotent-success symmetry.
     """
     from unittest.mock import patch
+
     import mcp_server
 
     fake_result = {
@@ -963,7 +854,8 @@ def test_v193_planning_remove_children_noop_returns_empty_removed() -> None:
     }
     with patch.object(mcp_server, "_run_zh", return_value=fake_result):
         out = mcp_server.epic_remove_children(
-            epic_number=42, issue_numbers=[100, 101],
+            epic_number=42,
+            issue_numbers=[100, 101],
         )
     assert out["ok"] is True
     assert out["outcome"] == "noop"
@@ -977,6 +869,7 @@ def test_v193_planning_add_children_ok_outcome_credits_added() -> None:
     so the noop fix doesn't accidentally suppress legitimate adds.
     """
     from unittest.mock import patch
+
     import mcp_server
 
     fake_result = {
@@ -988,7 +881,8 @@ def test_v193_planning_add_children_ok_outcome_credits_added() -> None:
     }
     with patch.object(mcp_server, "_run_zh", return_value=fake_result):
         out = mcp_server.epic_add_children(
-            epic_number=42, issue_numbers=[100, 101],
+            epic_number=42,
+            issue_numbers=[100, 101],
         )
     assert out["outcome"] == "ok"
     assert out["added"] == [100, 101]
@@ -1008,10 +902,7 @@ def test_round3_f1_comment_empty_message_returns_full_key_set() -> None:
     out = mcp_server.comment(number=42, message="")
     assert out["ok"] is False
     for key in ("number", "raw", "stderr"):
-        assert key in out, (
-            f"comment empty-message validation missing {key!r} "
-            f"(round-3 #1); got {sorted(out.keys())!r}"
-        )
+        assert key in out, f"comment empty-message validation missing {key!r} (round-3 #1); got {sorted(out.keys())!r}"
     assert out["number"] == 42
     assert out["stderr"] == "message must be non-empty"
 
@@ -1041,6 +932,7 @@ def test_round3_f2_subissue_add_children_partial_returns_ok_true() -> None:
       - outcome="fail"    → ok=False, partial_applied=False
     """
     from unittest.mock import patch
+
     import mcp_server
 
     fake_ctx_result = ("acme/widgets", None)
@@ -1058,24 +950,18 @@ def test_round3_f2_subissue_add_children_partial_returns_ok_true() -> None:
         "error": None,
     }
 
-    with patch.object(mcp_server, "_resolve_ctx",
-                      return_value=(object(), None)):
-        with patch("zh_graphql_ops.add_sub_issues",
-                   return_value=fake_partial):
+    with patch.object(mcp_server, "_resolve_ctx", return_value=(object(), None)):
+        with patch("zh_graphql_ops.add_sub_issues", return_value=fake_partial):
             out = mcp_server.subissue_add_children(42, [100, 101, 999])
     assert out["outcome"] == "partial"
-    assert out["partial_applied"] is True, (
-        f"partial outcome must surface partial_applied=True; got {out!r}"
-    )
-    assert out["ok"] is True, (
-        f"partial outcome must yield ok=True for parity with "
-        f"_planning_add_children (round-3 #2); got ok={out['ok']!r}"
-    )
+    assert out["partial_applied"] is True, f"partial outcome must surface partial_applied=True; got {out!r}"
+    assert out["ok"] is True, f"partial outcome must yield ok=True for parity with _planning_add_children (round-3 #2); got ok={out['ok']!r}"
 
 
 def test_round3_f2_subissue_remove_children_partial_returns_ok_true() -> None:
     """Symmetric pin for the remove side. Same contract."""
     from unittest.mock import patch
+
     import mcp_server
 
     fake_partial = {
@@ -1091,10 +977,8 @@ def test_round3_f2_subissue_remove_children_partial_returns_ok_true() -> None:
         "partial_success_warning": "1 input failed",
         "error": None,
     }
-    with patch.object(mcp_server, "_resolve_ctx",
-                      return_value=(object(), None)):
-        with patch("zh_graphql_ops.remove_sub_issues",
-                   return_value=fake_partial):
+    with patch.object(mcp_server, "_resolve_ctx", return_value=(object(), None)):
+        with patch("zh_graphql_ops.remove_sub_issues", return_value=fake_partial):
             out = mcp_server.subissue_remove_children(42, [100, 101, 999])
     assert out["outcome"] == "partial"
     assert out["partial_applied"] is True
@@ -1104,6 +988,7 @@ def test_round3_f2_subissue_remove_children_partial_returns_ok_true() -> None:
 def test_round3_f2_subissue_add_children_fail_returns_ok_false() -> None:
     """Negative regression guard: outcome=fail must keep ok=False."""
     from unittest.mock import patch
+
     import mcp_server
 
     fake_fail = {
@@ -1123,11 +1008,8 @@ def test_round3_f2_subissue_add_children_fail_returns_ok_false() -> None:
         "partial_success_warning": None,
         "error": None,
     }
-    with patch.object(mcp_server, "_resolve_ctx",
-                      return_value=(object(), None)):
-        with patch("zh_graphql_ops.add_sub_issues",
-                   return_value=fake_fail):
-            out = mcp_server.subissue_add_children(42, [100, 101, 102])
+    with patch.object(mcp_server, "_resolve_ctx", return_value=(object(), None)), patch("zh_graphql_ops.add_sub_issues", return_value=fake_fail):
+        out = mcp_server.subissue_add_children(42, [100, 101, 102])
     assert out["outcome"] == "fail"
     assert out["partial_applied"] is False
     assert out["ok"] is False
@@ -1174,19 +1056,14 @@ def test_round3_f3_hierarchy_create_short_flag_then_literal_title() -> None:
     r = run_zh_with_stubs(
         stubs,
         'cmd_hierarchy_create "$@"',
-        args=["Epic", "epic", "-l", "urgent",
-              "--rotate=enabled smoke test"],
+        args=["Epic", "epic", "-l", "urgent", "--rotate=enabled smoke test"],
     )
     # cmd_create should see the FULL literal `--rotate=enabled smoke test`
     # as the title, NOT the post-mangle `--rotate`.
     assert "TITLE:--rotate=enabled smoke test" in r.stderr, (
-        f"hierarchy_create mangled the title when short-flag value "
-        f"preceded it (round-3 #3); stderr={r.stderr!r}"
+        f"hierarchy_create mangled the title when short-flag value preceded it (round-3 #3); stderr={r.stderr!r}"
     )
-    assert "LABELS:urgent" in r.stderr, (
-        f"hierarchy_create dropped the -l value (round-3 #3); "
-        f"stderr={r.stderr!r}"
-    )
+    assert "LABELS:urgent" in r.stderr, f"hierarchy_create dropped the -l value (round-3 #3); stderr={r.stderr!r}"
 
 
 def test_round3_f14_planning_remove_children_clean_success_partial_false() -> None:
@@ -1198,11 +1075,11 @@ def test_round3_f14_planning_remove_children_clean_success_partial_false() -> No
     test.
     """
     from unittest.mock import patch
+
     import mcp_server
 
-    # v1.9.4 finding #1: clean-success requires the `__ZH_OUTCOME__:ok`
-    # sentinel in stderr_plain to credit children as landed. Without it,
-    # the wrapper defaults to added/removed=[] (conservative).
+    # v1.9.4 finding #1: clean-success requires the `__ZH_OUTCOME__:ok` sentinel in stderr_plain to credit children as landed.
+    # Without it, the wrapper defaults to added/removed=[] (conservative).
     fake_result = {
         "ok": True,
         "stdout_plain": "Removed 2/2",
@@ -1212,23 +1089,16 @@ def test_round3_f14_planning_remove_children_clean_success_partial_false() -> No
     }
     with patch.object(mcp_server, "_run_zh", return_value=fake_result):
         out = mcp_server.epic_remove_children(
-            epic_number=42, issue_numbers=[100, 101],
+            epic_number=42,
+            issue_numbers=[100, 101],
         )
     assert out["partial_applied"] is False
     assert out["ok"] is True
-    assert out["removed"] == [100, 101], (
-        f"clean-success removed must echo input, got {out['removed']!r}"
-    )
+    assert out["removed"] == [100, 101], f"clean-success removed must echo input, got {out['removed']!r}"
 
 
-# ===========================================================================
-# PR #27 ROUND-4 FINDING CLOSURES
-# ===========================================================================
-
-
-# Common stubs for the cmd_subissue_add / cmd_subissue_remove gate tests.
-# cmd_subissue_add resolves the parent via zh_resolve_issue_id (singular)
-# and the children via zh_resolve_issue_ids (plural -> JSON array).
+    # Common stubs for the cmd_subissue_add / cmd_subissue_remove gate tests. cmd_subissue_add resolves the parent via zh_resolve_issue_id
+    # (singular) and the children via zh_resolve_issue_ids (plural -> JSON array).
 _SUBISSUE_GATE_COMMON_STUBS = r"""
     load_config() { :; }
     get_repo_info() { printf 'acme/widgets'; }
@@ -1263,46 +1133,42 @@ def test_round4_f1_subissue_add_envelope_survives_zh_graphql_error() -> None:
     own error path with a clear cause hint instead of silently
     aborting via the subshell exit propagation.
     """
-    stubs = _SUBISSUE_GATE_COMMON_STUBS + r"""
+    stubs = (
+        _SUBISSUE_GATE_COMMON_STUBS
+        + r"""
         zh_graphql() {
             echo "Error: ZenHub API error: Invalid token" >&2
             exit 1
         }
     """
-    r = run_zh_with_stubs(stubs, 'cmd_subissue_add 42 100 101')
-    # The function must reach its own error wording, not abort silently.
-    assert r.returncode != 0, (
-        f"expected non-zero on transient .errors; got rc={r.returncode}"
     )
+    r = run_zh_with_stubs(stubs, "cmd_subissue_add 42 100 101")
+    # The function must reach its own error wording, not abort silently.
+    assert r.returncode != 0, f"expected non-zero on transient .errors; got rc={r.returncode}"
     assert "Failed to add sub-issues to #42" in r.stderr, (
-        f"cmd_subissue_add aborted under set -e instead of reaching its "
-        f"own error path (round-4 #1). stderr={r.stderr!r}"
+        f"cmd_subissue_add aborted under set -e instead of reaching its own error path (round-4 #1). stderr={r.stderr!r}"
     )
 
 
 def test_round4_f1_subissue_remove_envelope_survives_zh_graphql_error() -> None:
     """Symmetric pin for cmd_subissue_remove (round-4 #1)."""
-    stubs = _SUBISSUE_GATE_COMMON_STUBS + r"""
-        # cmd_subissue_remove also pre-validates parent membership via
-        # additional zh_graphql calls; route ALL of them through the
-        # error path to exercise the mutation envelope.
+    stubs = (
+        _SUBISSUE_GATE_COMMON_STUBS
+        + r"""
+        # cmd_subissue_remove also pre-validates parent membership via additional zh_graphql calls; route ALL of them
+        # through the error path to exercise the mutation envelope.
         zh_graphql() {
             echo "Error: ZenHub API error: rate-limited" >&2
             exit 1
         }
     """
-    r = run_zh_with_stubs(stubs, 'cmd_subissue_remove 42 100 101')
+    )
+    r = run_zh_with_stubs(stubs, "cmd_subissue_remove 42 100 101")
     assert r.returncode != 0
-    # Either the mutation envelope error wording OR the pre-validation
-    # error wording is acceptable; both are cmd_subissue_remove's own
-    # diagnostics, not a silent abort. The key claim is that the
-    # function REACHES one of its error paths instead of dying via
-    # the subshell propagation.
-    assert ("Failed to remove sub-issues from #42" in r.stderr
-            or "rate-limited" in r.stderr
-            or "#42" in r.stderr), (
-        f"cmd_subissue_remove aborted under set -e instead of reaching "
-        f"its own error path (round-4 #1). stderr={r.stderr!r}"
+    # Either the mutation envelope error wording OR the pre-validation error wording is acceptable; both are cmd_subissue_remove's own diagnostics, not a silent abort. The
+    # key claim is that the function REACHES one of its error paths instead of dying via the subshell propagation.
+    assert "Failed to remove sub-issues from #42" in r.stderr or "rate-limited" in r.stderr or "#42" in r.stderr, (
+        f"cmd_subissue_remove aborted under set -e instead of reaching its own error path (round-4 #1). stderr={r.stderr!r}"
     )
 
 
@@ -1315,26 +1181,25 @@ def test_round4_f6_subissue_add_partial_exits_2() -> None:
     response: successCount=1, failedIssues=[#102] → outcome=partial
     → exit 2.
     """
-    stubs = _SUBISSUE_GATE_COMMON_STUBS + r"""
+    stubs = (
+        _SUBISSUE_GATE_COMMON_STUBS
+        + r"""
         zh_graphql() {
             printf '%s' '{"data":{"addSubIssues":{"successCount":1,"failedIssues":[{"number":102,"repository":{"ownerName":"acme","name":"widgets"}}],"githubErrors":[]}}}'
         }
     """
-    r = run_zh_with_stubs(stubs, 'cmd_subissue_add 42 100 102')
-    assert r.returncode == 2, (
-        f"cmd_subissue_add partial outcome MUST exit 2 "
-        f"(round-3 #2 / round-4 #6); got rc={r.returncode}, "
-        f"stderr={r.stderr!r}"
     )
+    r = run_zh_with_stubs(stubs, "cmd_subissue_add 42 100 102")
+    assert r.returncode == 2, f"cmd_subissue_add partial outcome MUST exit 2 (round-3 #2 / round-4 #6); got rc={r.returncode}, stderr={r.stderr!r}"
 
 
 def test_round4_f6_subissue_remove_partial_exits_2() -> None:
     """Symmetric pin for cmd_subissue_remove (round-4 #6)."""
-    stubs = _SUBISSUE_GATE_COMMON_STUBS + r"""
-        # cmd_subissue_remove also pre-validates parent membership via
-        # additional queries before reaching the mutation. Build a
-        # multi-response stub so the pre-validation passes and only
-        # the final mutation drives the gate.
+    stubs = (
+        _SUBISSUE_GATE_COMMON_STUBS
+        + r"""
+        # cmd_subissue_remove also pre-validates parent membership via additional queries before reaching the mutation. Build a multi-response
+        # stub so the pre-validation passes and only the final mutation drives the gate.
         _GRAPHQL_CALL=0
         zh_graphql() {
             _GRAPHQL_CALL=$((_GRAPHQL_CALL + 1))
@@ -1343,24 +1208,19 @@ def test_round4_f6_subissue_remove_partial_exits_2() -> None:
                 # The mutation: partial response.
                 printf '%s' '{"data":{"removeSubIssues":{"successCount":1,"failedIssues":[{"number":102,"repository":{"ownerName":"acme","name":"widgets"}}],"githubErrors":[]}}}'
             else
-                # Pre-validation queries: return shape that says the
-                # children DO live under this parent so the validator
-                # passes.
+            # Pre-validation queries: return shape that says the children DO live under this parent so the validator passes.
                 printf '%s' '{"data":{"issueByInfo":{"id":"x","number":100,"parentIssue":{"id":"p","number":42,"title":"P","repository":{"ownerName":"acme","name":"widgets"}}}}}'
             fi
         }
     """
-    r = run_zh_with_stubs(stubs, 'cmd_subissue_remove 42 100 102')
-    # remove may have additional pre-validation paths; the gate-exit
-    # claim is the load-bearing assertion. If pre-validation rejects
-    # before reaching the mutation, treat it as a separate test
-    # surface (we have the add-side gate test above).
+    )
+    r = run_zh_with_stubs(stubs, "cmd_subissue_remove 42 100 102")
+    # remove may have additional pre-validation paths; the gate-exit claim is the load-bearing assertion. If pre-validation rejects before reaching
+    # the mutation, treat it as a separate test surface (we have the add-side gate test above).
     if r.returncode == 2:
         return  # gate fired as expected
-    # If pre-validation rejected, that's a different code path; we
-    # accept any non-zero exit with a clear diagnostic. The key
-    # negative-regression guarantee is "NOT exit 1 for partial via
-    # the mutation". Skip if pre-validation didn't pass through.
+        # If pre-validation rejected, that's a different code path; we accept any non-zero exit with a clear diagnostic. The key negative-regression guarantee
+        # is "NOT exit 1 for partial via the mutation". Skip if pre-validation didn't pass through.
     if "validation" in r.stderr.lower() or "parent" in r.stderr.lower():
         pytest.skip(
             f"cmd_subissue_remove pre-validation gated before mutation "
@@ -1368,10 +1228,7 @@ def test_round4_f6_subissue_remove_partial_exits_2() -> None:
             f"add-side sibling. stderr={r.stderr!r}"
         )
     # Otherwise assert exit 2 strictly.
-    assert r.returncode == 2, (
-        f"cmd_subissue_remove partial MUST exit 2; got rc={r.returncode}, "
-        f"stderr={r.stderr!r}"
-    )
+    assert r.returncode == 2, f"cmd_subissue_remove partial MUST exit 2; got rc={r.returncode}, stderr={r.stderr!r}"
 
 
 def test_round4_f5_subissue_add_noop_exits_0() -> None:
@@ -1380,17 +1237,17 @@ def test_round4_f5_subissue_add_noop_exits_0() -> None:
     state is already true. Exit 0, not exit 1. The pre-fix made
     agents retry an operation whose intent was already satisfied.
     """
-    stubs = _SUBISSUE_GATE_COMMON_STUBS + r"""
+    stubs = (
+        _SUBISSUE_GATE_COMMON_STUBS
+        + r"""
         zh_graphql() {
             # successCount=0, failedIssues=[] → outcome=noop.
             printf '%s' '{"data":{"addSubIssues":{"successCount":0,"failedIssues":[],"githubErrors":[]}}}'
         }
     """
-    r = run_zh_with_stubs(stubs, 'cmd_subissue_add 42 100 101')
-    assert r.returncode == 0, (
-        f"cmd_subissue_add noop is idempotent success and MUST exit 0 "
-        f"(round-4 #5); got rc={r.returncode}, stderr={r.stderr!r}"
     )
+    r = run_zh_with_stubs(stubs, "cmd_subissue_add 42 100 101")
+    assert r.returncode == 0, f"cmd_subissue_add noop is idempotent success and MUST exit 0 (round-4 #5); got rc={r.returncode}, stderr={r.stderr!r}"
 
 
 def test_round4_f5_subissue_remove_noop_exits_0() -> None:
@@ -1402,7 +1259,9 @@ def test_round4_f5_subissue_remove_noop_exits_0() -> None:
     `noop` from a non-empty input, skip — the contract still holds
     at the gate.
     """
-    stubs = _SUBISSUE_GATE_COMMON_STUBS + r"""
+    stubs = (
+        _SUBISSUE_GATE_COMMON_STUBS
+        + r"""
         _GRAPHQL_CALL=0
         zh_graphql() {
             _GRAPHQL_CALL=$((_GRAPHQL_CALL + 1))
@@ -1414,17 +1273,15 @@ def test_round4_f5_subissue_remove_noop_exits_0() -> None:
             fi
         }
     """
-    r = run_zh_with_stubs(stubs, 'cmd_subissue_remove 42 100 101')
+    )
+    r = run_zh_with_stubs(stubs, "cmd_subissue_remove 42 100 101")
     if r.returncode != 0 and "validation" in r.stderr.lower():
         pytest.skip(
             "cmd_subissue_remove pre-validation prevents reaching the "
             "noop path with this stub config; the add-side sibling "
             "test covers the round-4 #5 contract."
         )
-    assert r.returncode == 0, (
-        f"cmd_subissue_remove noop MUST exit 0; got rc={r.returncode}, "
-        f"stderr={r.stderr!r}"
-    )
+    assert r.returncode == 0, f"cmd_subissue_remove noop MUST exit 0; got rc={r.returncode}, stderr={r.stderr!r}"
 
 
 def test_v193_subissue_add_emits_noop_outcome_sentinel() -> None:
@@ -1433,16 +1290,18 @@ def test_v193_subissue_add_emits_noop_outcome_sentinel() -> None:
     successCount=0 / failedIssues=[]. The MCP wrapper relies on this
     to override `added=child_numbers` to `[]` (finding #1).
     """
-    stubs = _SUBISSUE_GATE_COMMON_STUBS + r"""
+    stubs = (
+        _SUBISSUE_GATE_COMMON_STUBS
+        + r"""
         zh_graphql() {
             printf '%s' '{"data":{"addSubIssues":{"successCount":0,"failedIssues":[],"githubErrors":[]}}}'
         }
     """
-    r = run_zh_with_stubs(stubs, 'cmd_subissue_add 42 100 101')
+    )
+    r = run_zh_with_stubs(stubs, "cmd_subissue_add 42 100 101")
     assert r.returncode == 0
     assert "__ZH_OUTCOME__:noop" in r.stderr, (
-        f"cmd_subissue_add must emit __ZH_OUTCOME__:noop on stderr when "
-        f"the API no-ops (v1.9.3 pattern-sweep #1). got stderr={r.stderr!r}"
+        f"cmd_subissue_add must emit __ZH_OUTCOME__:noop on stderr when the API no-ops (v1.9.3 pattern-sweep #1). got stderr={r.stderr!r}"
     )
 
 
@@ -1452,24 +1311,26 @@ def test_v193_subissue_add_emits_ok_outcome_sentinel() -> None:
     children from already-attached. The wrapper credits `added` only
     when the sentinel reports `ok`.
     """
-    stubs = _SUBISSUE_GATE_COMMON_STUBS + r"""
+    stubs = (
+        _SUBISSUE_GATE_COMMON_STUBS
+        + r"""
         zh_graphql() {
             printf '%s' '{"data":{"addSubIssues":{"successCount":2,"failedIssues":[],"githubErrors":[]}}}'
         }
     """
-    r = run_zh_with_stubs(stubs, 'cmd_subissue_add 42 100 101')
-    assert r.returncode == 0
-    assert "__ZH_OUTCOME__:ok" in r.stderr, (
-        f"cmd_subissue_add must emit __ZH_OUTCOME__:ok on the happy "
-        f"path. got stderr={r.stderr!r}"
     )
+    r = run_zh_with_stubs(stubs, "cmd_subissue_add 42 100 101")
+    assert r.returncode == 0
+    assert "__ZH_OUTCOME__:ok" in r.stderr, f"cmd_subissue_add must emit __ZH_OUTCOME__:ok on the happy path. got stderr={r.stderr!r}"
 
 
 def test_v193_subissue_remove_emits_outcome_sentinel() -> None:
     """Symmetric sentinel emit for cmd_subissue_remove. Tests the
     partial branch since pre-validation may block the noop path.
     """
-    stubs = _SUBISSUE_GATE_COMMON_STUBS + r"""
+    stubs = (
+        _SUBISSUE_GATE_COMMON_STUBS
+        + r"""
         zh_graphql() {
             local q="$1"
             if [[ "$q" == *removeSubIssues* ]]; then
@@ -1479,14 +1340,12 @@ def test_v193_subissue_remove_emits_outcome_sentinel() -> None:
             fi
         }
     """
-    r = run_zh_with_stubs(stubs, 'cmd_subissue_remove 42 100 101')
+    )
+    r = run_zh_with_stubs(stubs, "cmd_subissue_remove 42 100 101")
     # Partial gate fires (failed_count=1, success_count=1) → exit 2
     # and outcome=partial sentinel.
     assert r.returncode == 2
-    assert "__ZH_OUTCOME__:partial" in r.stderr, (
-        f"cmd_subissue_remove must emit __ZH_OUTCOME__:partial on "
-        f"partial. got stderr={r.stderr!r}"
-    )
+    assert "__ZH_OUTCOME__:partial" in r.stderr, f"cmd_subissue_remove must emit __ZH_OUTCOME__:partial on partial. got stderr={r.stderr!r}"
 
 
 def test_v193_create_issue_validation_includes_duplicate_check() -> None:
@@ -1500,10 +1359,7 @@ def test_v193_create_issue_validation_includes_duplicate_check() -> None:
 
     out = mcp_server.create_issue(title="", body="non-empty body")
     assert out["ok"] is False
-    assert "duplicate_check" in out, (
-        f"create_issue empty-title must include duplicate_check "
-        f"placeholder (v1.9.3 #5); got {sorted(out.keys())!r}"
-    )
+    assert "duplicate_check" in out, f"create_issue empty-title must include duplicate_check placeholder (v1.9.3 #5); got {sorted(out.keys())!r}"
     assert out["duplicate_check"]["recommendation"] == "skipped"
     assert out["duplicate_check"]["matches"] == []
 
@@ -1524,10 +1380,7 @@ def test_v193_planning_create_validation_includes_duplicate_check() -> None:
 
     out = mcp_server.epic_create(title="")
     assert out["ok"] is False
-    assert "duplicate_check" in out, (
-        f"epic_create empty-title must include duplicate_check "
-        f"placeholder (v1.9.3 #5); got {sorted(out.keys())!r}"
-    )
+    assert "duplicate_check" in out, f"epic_create empty-title must include duplicate_check placeholder (v1.9.3 #5); got {sorted(out.keys())!r}"
     assert out["duplicate_check"]["recommendation"] == "skipped"
 
 
@@ -1537,6 +1390,7 @@ def test_v193_subissue_reorder_emits_parent_alias() -> None:
     round-4 #2 alias on subissue_add_children / subissue_remove_children.
     """
     from unittest.mock import patch
+
     import mcp_server
 
     # Mock the GraphQL layer to return a clean reorder result.
@@ -1549,13 +1403,10 @@ def test_v193_subissue_reorder_emits_parent_alias() -> None:
     }
     with patch.object(mcp_server, "_resolve_ctx", return_value=fake_ctx):
         import zh_graphql_ops
-        with patch.object(zh_graphql_ops, "reorder_sub_issue",
-                          return_value=fake_result):
+
+        with patch.object(zh_graphql_ops, "reorder_sub_issue", return_value=fake_result):
             out = mcp_server.subissue_reorder(child_number=100, position="top")
-    assert "parent" in out, (
-        f"subissue_reorder must expose the `parent` alias "
-        f"(v1.9.3 #12); got {sorted(out.keys())!r}"
-    )
+    assert "parent" in out, f"subissue_reorder must expose the `parent` alias (v1.9.3 #12); got {sorted(out.keys())!r}"
     assert out["parent"] == out["parent_number"] == 42
 
 
@@ -1566,6 +1417,7 @@ def test_v193_write_tools_return_ansi_clean_stderr() -> None:
     codes themselves.
     """
     from unittest.mock import patch
+
     import mcp_server
 
     # Simulate a stderr with embedded ANSI escape codes (the production
@@ -1581,8 +1433,7 @@ def test_v193_write_tools_return_ansi_clean_stderr() -> None:
     with patch.object(mcp_server, "_run_zh", return_value=fake_result):
         out = mcp_server.close_issue(42)
     assert "\x1b[" not in out["stderr"], (
-        f"close_issue must surface stderr_plain (ANSI-stripped), not raw "
-        f"stderr (v1.9.3 #4); got stderr={out['stderr']!r}"
+        f"close_issue must surface stderr_plain (ANSI-stripped), not raw stderr (v1.9.3 #4); got stderr={out['stderr']!r}"
     )
     assert out["stderr"] == "warn: partial issue"
 
@@ -1616,41 +1467,25 @@ def test_v193_zh_cause_hint_pure_bash_strips_osc_st_terminator() -> None:
         err_file = pathlib.Path(tmp_dir) / "stderr.txt"
         err_file.write_text(osc_st)
 
-        # v1.9.6 (issue #42): force the pure-bash branch by running
-        # zh_cause_hint under an EMPTY PATH, so `command -v sed` (and
-        # awk/paste/tr) all fail and the all-four gate falls through.
-        # The pre-v1.9.6 version installed a `command() {...}` function
-        # that shadowed the bash builtin for the whole subshell; a future
-        # `command -v X` call added to zh_cause_hint would have routed
-        # through the stub and behaved differently from production. zh is
-        # sourced FIRST under the normal PATH (its top-level `$(cat ...)`
-        # etc. need real tools); only the helper call runs PATH-less, and
-        # the pure-bash branch uses bash builtins exclusively, so an empty
-        # PATH is safe there. The `command` builtin stays intact.
+        # v1.9.6 (issue #42): force the pure-bash branch by running zh_cause_hint under an EMPTY PATH, so `command -v sed` (and awk/paste/tr) all fail and the all-four gate falls through. The pre-v1.9.6 version installed a `command() {...}` function that shadowed the bash builtin for the whole subshell; a future `command -v X` call added to zh_cause_hint would have routed
+        # through the stub and behaved differently from production. zh is sourced FIRST under the normal PATH (its top-level `$(cat ...)` etc. need real tools); only the helper call runs PATH-less, and the pure-bash branch uses bash builtins exclusively, so an empty PATH is safe there. The `command` builtin stays intact.
         zh_path = pathlib.Path(__file__).parent.parent / "zh"
-        wrapper = (
-            f'source "{zh_path}" 2>/dev/null || true\n'
-            f'PATH= zh_cause_hint "{err_file}"\n'
-        )
+        wrapper = f'source "{zh_path}" 2>/dev/null || true\nPATH= zh_cause_hint "{err_file}"\n'
         r = subprocess.run(
-            ["bash", "-c", wrapper], capture_output=True, text=True,
+            ["bash", "-c", wrapper],
+            capture_output=True,
+            text=True,
             timeout=15,
         )
         assert "diagnostic message" in r.stdout, (
-            f"pure-bash branch must preserve the post-OSC text "
-            f"(v1.9.3 #7); got stdout={r.stdout!r}, stderr={r.stderr!r}"
+            f"pure-bash branch must preserve the post-OSC text (v1.9.3 #7); got stdout={r.stdout!r}, stderr={r.stderr!r}"
         )
-        assert "\033" not in r.stdout, (
-            f"pure-bash branch must strip the OSC escape; "
-            f"got stdout={r.stdout!r}"
-        )
+        assert "\033" not in r.stdout, f"pure-bash branch must strip the OSC escape; got stdout={r.stdout!r}"
         # OSC body text (the title) must be stripped along with the escape.
-        assert "test-title" not in r.stdout, (
-            f"OSC body text must be stripped along with the escape; "
-            f"got stdout={r.stdout!r}"
-        )
+        assert "test-title" not in r.stdout, f"OSC body text must be stripped along with the escape; got stdout={r.stdout!r}"
     finally:
         import shutil
+
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
@@ -1675,16 +1510,16 @@ def _run_cause_hint_purebash_bytes(raw: bytes):
         err_file = pathlib.Path(tmp_dir) / "stderr.bin"
         err_file.write_bytes(raw)
         zh_path = pathlib.Path(__file__).parent.parent / "zh"
-        wrapper = (
-            f'source "{zh_path}" 2>/dev/null || true\n'
-            f'PATH= zh_cause_hint "{err_file}"\n'
-        )
+        wrapper = f'source "{zh_path}" 2>/dev/null || true\nPATH= zh_cause_hint "{err_file}"\n'
         return subprocess.run(
-            ["bash", "-c", wrapper], capture_output=True, text=False,
+            ["bash", "-c", wrapper],
+            capture_output=True,
+            text=False,
             timeout=15,
         )
     finally:
         import shutil
+
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
@@ -1695,18 +1530,10 @@ def test_v196_c1_single_byte_st_0x9c_normalized() -> None:
     # ESC ] 0;test-title <0x9C> diagnostic message
     raw = b"\x1b]0;test-title\x9cdiagnostic message"
     r = _run_cause_hint_purebash_bytes(raw)
-    assert b"diagnostic message" in r.stdout, (
-        f"post-OSC text must survive; got stdout={r.stdout!r}"
-    )
-    assert b"\x9c" not in r.stdout, (
-        f"raw 8-bit ST byte must be normalized away; got stdout={r.stdout!r}"
-    )
-    assert b"\x1b" not in r.stdout, (
-        f"OSC escape must be stripped; got stdout={r.stdout!r}"
-    )
-    assert b"test-title" not in r.stdout, (
-        f"OSC body must be stripped; got stdout={r.stdout!r}"
-    )
+    assert b"diagnostic message" in r.stdout, f"post-OSC text must survive; got stdout={r.stdout!r}"
+    assert b"\x9c" not in r.stdout, f"raw 8-bit ST byte must be normalized away; got stdout={r.stdout!r}"
+    assert b"\x1b" not in r.stdout, f"OSC escape must be stripped; got stdout={r.stdout!r}"
+    assert b"test-title" not in r.stdout, f"OSC body must be stripped; got stdout={r.stdout!r}"
 
 
 def test_v196_c1_single_byte_csi_0x9b_normalized() -> None:
@@ -1716,18 +1543,10 @@ def test_v196_c1_single_byte_csi_0x9b_normalized() -> None:
     # before <0x9B>31m after  (8-bit CSI introduces a colour SGR sequence)
     raw = b"before\x9b31mafter"
     r = _run_cause_hint_purebash_bytes(raw)
-    assert b"before" in r.stdout and b"after" in r.stdout, (
-        f"text around the CSI must survive; got stdout={r.stdout!r}"
-    )
-    assert b"\x9b" not in r.stdout, (
-        f"raw 8-bit CSI byte must be normalized away; got stdout={r.stdout!r}"
-    )
-    assert b"\x1b" not in r.stdout, (
-        f"expanded CSI escape must be stripped; got stdout={r.stdout!r}"
-    )
-    assert b"31m" not in r.stdout, (
-        f"CSI parameter/final bytes must be stripped; got stdout={r.stdout!r}"
-    )
+    assert b"before" in r.stdout and b"after" in r.stdout, f"text around the CSI must survive; got stdout={r.stdout!r}"
+    assert b"\x9b" not in r.stdout, f"raw 8-bit CSI byte must be normalized away; got stdout={r.stdout!r}"
+    assert b"\x1b" not in r.stdout, f"expanded CSI escape must be stripped; got stdout={r.stdout!r}"
+    assert b"31m" not in r.stdout, f"CSI parameter/final bytes must be stripped; got stdout={r.stdout!r}"
 
 
 def test_v196_c1_utf8_two_byte_st_normalized() -> None:
@@ -1739,19 +1558,10 @@ def test_v196_c1_utf8_two_byte_st_normalized() -> None:
     # ESC ] 0;test-title <0xC2 0x9C> diagnostic message
     raw = b"\x1b]0;test-title\xc2\x9cdiagnostic message"
     r = _run_cause_hint_purebash_bytes(raw)
-    assert b"diagnostic message" in r.stdout, (
-        f"post-OSC text must survive; got stdout={r.stdout!r}"
-    )
-    assert b"\x9c" not in r.stdout, (
-        f"trailing UTF-8 ST byte must be normalized away; "
-        f"got stdout={r.stdout!r}"
-    )
-    assert b"\x1b" not in r.stdout, (
-        f"OSC escape must be stripped; got stdout={r.stdout!r}"
-    )
-    assert b"test-title" not in r.stdout, (
-        f"OSC body must be stripped; got stdout={r.stdout!r}"
-    )
+    assert b"diagnostic message" in r.stdout, f"post-OSC text must survive; got stdout={r.stdout!r}"
+    assert b"\x9c" not in r.stdout, f"trailing UTF-8 ST byte must be normalized away; got stdout={r.stdout!r}"
+    assert b"\x1b" not in r.stdout, f"OSC escape must be stripped; got stdout={r.stdout!r}"
+    assert b"test-title" not in r.stdout, f"OSC body must be stripped; got stdout={r.stdout!r}"
 
 
 def test_v193_top_level_write_tools_expose_partial_applied() -> None:
@@ -1768,6 +1578,7 @@ def test_v193_top_level_write_tools_expose_partial_applied() -> None:
     hiding the uniform-key gap from CI. The sweep now covers them.
     """
     from unittest.mock import patch
+
     import mcp_server
 
     fake_result = {
@@ -1788,27 +1599,21 @@ def test_v193_top_level_write_tools_expose_partial_applied() -> None:
         ("set_estimate", lambda: mcp_server.set_estimate(42, "3")),
         ("set_priority", lambda: mcp_server.set_priority(42, "High")),
         ("block_issue", lambda: mcp_server.block_issue(42, 43)),
-        # v1.9.4 #1 + #2: create surfaces (most-called write
-        # tools in the API). Skip duplicate check to avoid hitting the
-        # similarity engine in this shape-only test.
-        ("create_issue", lambda: mcp_server.create_issue(
-            "Title", "Body", skip_duplicate_check=True)),
-        ("epic_create", lambda: mcp_server.epic_create(
-            "E", skip_duplicate_check=True)),
-        ("project_create", lambda: mcp_server.project_create(
-            "P", skip_duplicate_check=True)),
-        ("initiative_create", lambda: mcp_server.initiative_create(
-            "I", skip_duplicate_check=True)),
-        ("subtask_create", lambda: mcp_server.subtask_create(
-            "S", skip_duplicate_check=True)),
+        # v1.9.4 #1 + #2: create surfaces (most-called write tools in the API). Skip duplicate check to avoid
+        # hitting the similarity engine in this shape-only test.
+        (
+            "create_issue",
+            lambda: mcp_server.create_issue("Title", "Body", skip_duplicate_check=True),
+        ),
+        ("epic_create", lambda: mcp_server.epic_create("E", skip_duplicate_check=True)),
+        ("project_create", lambda: mcp_server.project_create("P", skip_duplicate_check=True)),
+        ("initiative_create", lambda: mcp_server.initiative_create("I", skip_duplicate_check=True)),
+        ("subtask_create", lambda: mcp_server.subtask_create("S", skip_duplicate_check=True)),
     ]
     with patch.object(mcp_server, "_run_zh", return_value=fake_result):
         for name, call in write_calls:
             out = call()
-            assert "partial_applied" in out, (
-                f"{name} must expose partial_applied (v1.9.4 #1 + sweep); "
-                f"got {sorted(out.keys())!r}"
-            )
+            assert "partial_applied" in out, f"{name} must expose partial_applied (v1.9.4 #1 + sweep); got {sorted(out.keys())!r}"
             assert out["partial_applied"] is False
 
 
@@ -1832,15 +1637,25 @@ def test_v193_create_issue_validation_returns_include_partial_applied() -> None:
     # The full shape every create early-return must emit (mcp_server.py
     # `_empty_create_shape` + the stderr / duplicate_check the return adds).
     expected_keys = {
-        "ok", "partial_applied", "number", "url", "type", "pipeline",
-        "parent", "estimate", "estimate_requested", "priority",
-        "priority_requested", "raw", "stderr", "duplicate_check",
+        "ok",
+        "partial_applied",
+        "number",
+        "url",
+        "type",
+        "pipeline",
+        "parent",
+        "estimate",
+        "estimate_requested",
+        "priority",
+        "priority_requested",
+        "raw",
+        "stderr",
+        "duplicate_check",
     }
 
     def _assert_validation_shape(out: dict, *, expect_stderr_contains: str):
         assert set(out.keys()) >= expected_keys, (
-            f"validation-failure shape dropped keys "
-            f"{expected_keys - set(out.keys())!r}; got {sorted(out.keys())!r}"
+            f"validation-failure shape dropped keys {expected_keys - set(out.keys())!r}; got {sorted(out.keys())!r}"
         )
         # Pin defaults, not just presence — "key present but default
         # changed" is the actual regression class (issue #45).
@@ -1856,8 +1671,7 @@ def test_v193_create_issue_validation_returns_include_partial_applied() -> None:
         assert out["priority"] is None
         assert out["priority_requested"] is None
         assert out["raw"] == ""
-        assert out["duplicate_check"] == {"recommendation": "skipped",
-                                          "matches": []}
+        assert out["duplicate_check"] == {"recommendation": "skipped", "matches": []}
         assert expect_stderr_contains in out["stderr"]
 
     _assert_validation_shape(
@@ -1888,42 +1702,38 @@ def test_v194r2_blocked_duplicate_path_exposes_partial_applied_false() -> None:
     recommendation; verify partial_applied is present and False.
     """
     from unittest.mock import patch
+
     import mcp_server
 
     block_dup_info = {
         "recommendation": "block",
         "hard_threshold": 0.85,
         "matches": [
-            {"number": 7, "title": "earlier", "similarity": 0.91,
-             "state": "open"},
+            {"number": 7, "title": "earlier", "similarity": 0.91, "state": "open"},
         ],
     }
 
     def fake_check_duplicate(title, body, repo, **kwargs):
         return block_dup_info
 
-    with patch("similarity.check_duplicate", new=fake_check_duplicate), \
-            patch.object(mcp_server, "_similarity_repo",
-                         return_value=("acme/widgets", None)):
+    with (
+        patch("similarity.check_duplicate", new=fake_check_duplicate),
+        patch.object(mcp_server, "_similarity_repo", return_value=("acme/widgets", None)),
+    ):
         out = mcp_server.create_issue(
-            title="something new", body="body",
+            title="something new",
+            body="body",
             skip_duplicate_check=False,
         )
-    assert out["ok"] is False, (
-        f"dup-block path must report ok=False; got {out['ok']!r}"
-    )
-    assert out.get("blocked") is True, (
-        f"dup-block path must set blocked=True; got {out.get('blocked')!r}"
-    )
-    assert "partial_applied" in out, (
-        "blocked create_issue must include partial_applied "
-        "(v1.9.4 #1 uniform-key contract)"
-    )
+    assert out["ok"] is False, f"dup-block path must report ok=False; got {out['ok']!r}"
+    assert out.get("blocked") is True, f"dup-block path must set blocked=True; got {out.get('blocked')!r}"
+    assert "partial_applied" in out, "blocked create_issue must include partial_applied (v1.9.4 #1 uniform-key contract)"
     assert out["partial_applied"] is False
 
-    with patch("similarity.check_duplicate", new=fake_check_duplicate), \
-            patch.object(mcp_server, "_similarity_repo",
-                         return_value=("acme/widgets", None)):
+    with (
+        patch("similarity.check_duplicate", new=fake_check_duplicate),
+        patch.object(mcp_server, "_similarity_repo", return_value=("acme/widgets", None)),
+    ):
         out = mcp_server.epic_create(
             title="something new",
             description="d",
@@ -1931,9 +1741,7 @@ def test_v194r2_blocked_duplicate_path_exposes_partial_applied_false() -> None:
         )
     assert out["ok"] is False
     assert out.get("blocked") is True
-    assert "partial_applied" in out, (
-        "blocked _planning_create must include partial_applied"
-    )
+    assert "partial_applied" in out, "blocked _planning_create must include partial_applied"
     assert out["partial_applied"] is False
 
 
@@ -1945,23 +1753,26 @@ def test_v194r2_create_issue_parent_wire_failure_flips_partial_applied() -> None
     as partial_applied=True for parity with the children-wrapper
     contract.
     """
-    from unittest.mock import patch
     import json
+    from unittest.mock import patch
+
     import mcp_server
 
     # Bash emits the issue's create JSON with parent=null because the
     # subsequent addSubIssues call failed; --parent 42 was requested.
-    fake_create_json = json.dumps({
-        "number": 999,
-        "url": "https://example.com/issue/999",
-        "type": "Task",
-        "pipeline": "Backlog",
-        "parent": None,
-        "estimate": None,
-        "estimate_requested": None,
-        "priority": None,
-        "priority_requested": None,
-    })
+    fake_create_json = json.dumps(
+        {
+            "number": 999,
+            "url": "https://example.com/issue/999",
+            "type": "Task",
+            "pipeline": "Backlog",
+            "parent": None,
+            "estimate": None,
+            "estimate_requested": None,
+            "priority": None,
+            "priority_requested": None,
+        }
+    )
     fake_result = {
         "ok": True,
         "stdout_plain": fake_create_json,
@@ -1980,28 +1791,30 @@ def test_v194r2_create_issue_parent_wire_failure_flips_partial_applied() -> None
     assert out["number"] == 999
     assert out["parent"] is None
     assert out["partial_applied"] is True, (
-        "parent-wire failure (requested=42, actual=None) must surface "
-        "as partial_applied=True; got "
-        f"{out['partial_applied']!r}"
+        f"parent-wire failure (requested=42, actual=None) must surface as partial_applied=True; got {out['partial_applied']!r}"
     )
 
     # Clean success (requested == actual) must still be partial=False.
-    fake_create_json_ok = json.dumps({
-        "number": 1000,
-        "url": "https://example.com/issue/1000",
-        "type": "Task",
-        "pipeline": "Backlog",
-        "parent": 42,
-        "estimate": None,
-        "estimate_requested": None,
-        "priority": None,
-        "priority_requested": None,
-    })
+    fake_create_json_ok = json.dumps(
+        {
+            "number": 1000,
+            "url": "https://example.com/issue/1000",
+            "type": "Task",
+            "pipeline": "Backlog",
+            "parent": 42,
+            "estimate": None,
+            "estimate_requested": None,
+            "priority": None,
+            "priority_requested": None,
+        }
+    )
     fake_result_ok = dict(fake_result, stdout_plain=fake_create_json_ok)
     with patch.object(mcp_server, "_run_zh", return_value=fake_result_ok):
         out_ok = mcp_server.create_issue(
-            title="linked", body="b",
-            parent=42, skip_duplicate_check=True,
+            title="linked",
+            body="b",
+            parent=42,
+            skip_duplicate_check=True,
         )
     assert out_ok["partial_applied"] is False
     assert out_ok["parent"] == 42
@@ -2018,7 +1831,9 @@ def test_v193_subissue_remove_emits_noop_outcome_sentinel() -> None:
     parent matches the requested parent, then the API mutation must
     return success=0/failed=[]. We stub both branches.
     """
-    stubs = _SUBISSUE_GATE_COMMON_STUBS + r"""
+    stubs = (
+        _SUBISSUE_GATE_COMMON_STUBS
+        + r"""
         zh_graphql() {
             local q="$1"
             if [[ "$q" == *removeSubIssues* ]]; then
@@ -2030,26 +1845,17 @@ def test_v193_subissue_remove_emits_noop_outcome_sentinel() -> None:
             fi
         }
     """
-    r = run_zh_with_stubs(stubs, 'cmd_subissue_remove 42 100')
-    # round-4 #5: noop is idempotent success → exit 0.
-    assert r.returncode == 0, (
-        f"cmd_subissue_remove noop must exit 0 (idempotent success); "
-        f"got rc={r.returncode}, stderr={r.stderr!r}"
     )
+    r = run_zh_with_stubs(stubs, "cmd_subissue_remove 42 100")
+    # round-4 #5: noop is idempotent success → exit 0.
+    assert r.returncode == 0, f"cmd_subissue_remove noop must exit 0 (idempotent success); got rc={r.returncode}, stderr={r.stderr!r}"
     assert "__ZH_OUTCOME__:noop" in r.stderr, (
-        f"cmd_subissue_remove must emit __ZH_OUTCOME__:noop on stderr "
-        f"when the API no-ops (v1.9.4 #3). got stderr={r.stderr!r}"
+        f"cmd_subissue_remove must emit __ZH_OUTCOME__:noop on stderr when the API no-ops (v1.9.4 #3). got stderr={r.stderr!r}"
     )
 
-    # v1.9.6 (issue #41): pin the cascade ORDER, not just the N=1 path.
-    # The outcome cascade is `... elif success==0: noop  elif divergence:
-    # partial ...`. With successCount=0 and 2 inputs, divergence is true
-    # (success_count 0 != inferred_removed_count 2), so BOTH the noop and
-    # the divergence-partial arms are live simultaneously. The result must
-    # be `noop` (idempotent success, exit 0), proving the noop arm
-    # precedes the divergence-partial arm. A refactor that swapped the two
-    # arms would flip this to `partial` (exit 2) and get caught here.
-    r2 = run_zh_with_stubs(stubs, 'cmd_subissue_remove 42 100 101')
+    # v1.9.6 (issue #41): pin the cascade ORDER, not just the N=1 path. The outcome cascade is `... elif success==0: noop  elif divergence: partial ...`. With successCount=0 and 2 inputs, divergence is true (success_count 0 != inferred_removed_count 2), so BOTH the noop and the divergence-partial
+    # arms are live simultaneously. The result must be `noop` (idempotent success, exit 0), proving the noop arm precedes the divergence-partial arm. A refactor that swapped the two arms would flip this to `partial` (exit 2) and get caught here.
+    r2 = run_zh_with_stubs(stubs, "cmd_subissue_remove 42 100 101")
     assert r2.returncode == 0, (
         f"N=2 strict-noop (successCount=0, failed=[]) must exit 0, not 2: "
         f"the noop arm must win over the divergence-partial arm. "
@@ -2072,6 +1878,7 @@ def test_v193_planning_add_children_missing_sentinel_keeps_added_empty() -> None
     field reach the same conservative conclusion.
     """
     from unittest.mock import patch
+
     import mcp_server
 
     fake_result = {
@@ -2083,18 +1890,15 @@ def test_v193_planning_add_children_missing_sentinel_keeps_added_empty() -> None
     }
     with patch.object(mcp_server, "_run_zh", return_value=fake_result):
         out = mcp_server.epic_add_children(
-            epic_number=42, issue_numbers=[100, 101],
+            epic_number=42,
+            issue_numbers=[100, 101],
         )
-    assert out["added"] == [], (
-        f"missing sentinel + exit 0 must NOT credit children as added "
-        f"(v1.9.4 #7); got added={out['added']!r}"
-    )
+    assert out["added"] == [], f"missing sentinel + exit 0 must NOT credit children as added (v1.9.4 #7); got added={out['added']!r}"
     assert out["added_requested"] == [100, 101]
     # v1.9.4 round-2 #1: outcome agrees with added=[] in the
     # sentinel-absent path. No more internally-contradictory state.
     assert out["outcome"] == "ok_unverified", (
-        f"sentinel-absent + r['ok']=True must report ok_unverified, "
-        f"not ok (would contradict added=[]); got {out['outcome']!r}"
+        f"sentinel-absent + r['ok']=True must report ok_unverified, not ok (would contradict added=[]); got {out['outcome']!r}"
     )
 
 
@@ -2112,24 +1916,14 @@ def test_v193_outcome_sentinel_regex_anchored_and_last_match_wins() -> None:
 
     # Earlier line "looks like" a sentinel but it's embedded in
     # warn-prefixed text (no leading ^). The real sentinel comes last.
-    poisoned = (
-        "warn:   githubErrors: [{...__ZH_OUTCOME__:ok...}]\n"
-        "__ZH_OUTCOME__:fail\n"
-    )
-    assert mcp_server._parse_outcome_sentinel(poisoned) == "fail", (
-        "Last sentinel wins; embedded-in-text occurrences must not "
-        "poison classification."
-    )
+    poisoned = "warn:   githubErrors: [{...__ZH_OUTCOME__:ok...}]\n__ZH_OUTCOME__:fail\n"
+    assert mcp_server._parse_outcome_sentinel(poisoned) == "fail", "Last sentinel wins; embedded-in-text occurrences must not poison classification."
 
     # A standalone valid sentinel returns the outcome.
-    assert mcp_server._parse_outcome_sentinel(
-        "warn: thing\n__ZH_OUTCOME__:noop\n"
-    ) == "noop"
+    assert mcp_server._parse_outcome_sentinel("warn: thing\n__ZH_OUTCOME__:noop\n") == "noop"
 
     # A made-up outcome name is NOT matched (constrained alternation).
-    assert mcp_server._parse_outcome_sentinel(
-        "__ZH_OUTCOME__:okx\n"
-    ) is None
+    assert mcp_server._parse_outcome_sentinel("__ZH_OUTCOME__:okx\n") is None
 
 
 def test_round4_f7_planning_add_children_partial_values_pinned() -> None:
@@ -2144,44 +1938,52 @@ def test_round4_f7_planning_add_children_partial_values_pinned() -> None:
       fail:    added=[], added_requested=<input>
     """
     from unittest.mock import patch
+
     import mcp_server
 
     # Partial: exit 2
-    with patch.object(mcp_server, "_run_zh",
-                      return_value={"ok": False, "exit_code": 2,
-                                    "stdout_plain": "", "stderr": "partial"}):
+    with patch.object(
+        mcp_server,
+        "_run_zh",
+        return_value={"ok": False, "exit_code": 2, "stdout_plain": "", "stderr": "partial"},
+    ):
         out = mcp_server.epic_add_children(
-            epic_number=42, issue_numbers=[100, 101, 999],
+            epic_number=42,
+            issue_numbers=[100, 101, 999],
         )
     assert out["partial_applied"] is True
-    assert out["added"] == [], (
-        f"partial path: `added` must be empty (verify via subissue_list); "
-        f"got {out['added']!r}"
-    )
-    assert out["added_requested"] == [100, 101, 999], (
-        f"partial path: `added_requested` must echo input; "
-        f"got {out['added_requested']!r}"
-    )
+    assert out["added"] == [], f"partial path: `added` must be empty (verify via subissue_list); got {out['added']!r}"
+    assert out["added_requested"] == [100, 101, 999], f"partial path: `added_requested` must echo input; got {out['added_requested']!r}"
 
-    # Full success: exit 0 + explicit `__ZH_OUTCOME__:ok` sentinel
-    # (v1.9.4 finding #1: sentinel is now required to credit children
-    # as landed; missing sentinel defaults to added=[]).
-    with patch.object(mcp_server, "_run_zh",
-                      return_value={"ok": True, "exit_code": 0,
-                                    "stdout_plain": "ok", "stderr": "",
-                                    "stderr_plain": "__ZH_OUTCOME__:ok"}):
+    # Full success: exit 0 + explicit `__ZH_OUTCOME__:ok` sentinel (v1.9.4 finding #1: sentinel is now required to credit
+    # children as landed; missing sentinel defaults to added=[]).
+    with patch.object(
+        mcp_server,
+        "_run_zh",
+        return_value={
+            "ok": True,
+            "exit_code": 0,
+            "stdout_plain": "ok",
+            "stderr": "",
+            "stderr_plain": "__ZH_OUTCOME__:ok",
+        },
+    ):
         out = mcp_server.epic_add_children(
-            epic_number=42, issue_numbers=[100, 101],
+            epic_number=42,
+            issue_numbers=[100, 101],
         )
     assert out["added"] == [100, 101]
     assert out["added_requested"] == [100, 101]
 
     # Hard failure: exit 1
-    with patch.object(mcp_server, "_run_zh",
-                      return_value={"ok": False, "exit_code": 1,
-                                    "stdout_plain": "", "stderr": "fail"}):
+    with patch.object(
+        mcp_server,
+        "_run_zh",
+        return_value={"ok": False, "exit_code": 1, "stdout_plain": "", "stderr": "fail"},
+    ):
         out = mcp_server.epic_add_children(
-            epic_number=42, issue_numbers=[100, 101],
+            epic_number=42,
+            issue_numbers=[100, 101],
         )
     assert out["added"] == []
     assert out["added_requested"] == [100, 101]
@@ -2191,13 +1993,17 @@ def test_round4_f7_planning_remove_children_partial_values_pinned() -> None:
     """Symmetric for _planning_remove_children's removed/removed_requested
     split."""
     from unittest.mock import patch
+
     import mcp_server
 
-    with patch.object(mcp_server, "_run_zh",
-                      return_value={"ok": False, "exit_code": 2,
-                                    "stdout_plain": "", "stderr": "partial"}):
+    with patch.object(
+        mcp_server,
+        "_run_zh",
+        return_value={"ok": False, "exit_code": 2, "stdout_plain": "", "stderr": "partial"},
+    ):
         out = mcp_server.epic_remove_children(
-            epic_number=42, issue_numbers=[100, 101, 999],
+            epic_number=42,
+            issue_numbers=[100, 101, 999],
         )
     assert out["partial_applied"] is True
     assert out["removed"] == []
@@ -2242,17 +2048,17 @@ def test_round4_f3_planning_update_includes_partial_applied() -> None:
     # Validation path (title and description both empty).
     out = mcp_server.epic_update(epic_number=42, title="", description="")
     assert out["ok"] is False
-    assert "partial_applied" in out, (
-        f"_planning_update validation must include partial_applied "
-        f"(round-4 #3); got {sorted(out.keys())!r}"
-    )
+    assert "partial_applied" in out, f"_planning_update validation must include partial_applied (round-4 #3); got {sorted(out.keys())!r}"
     assert out["partial_applied"] is False
 
     # Success path.
     from unittest.mock import patch
-    with patch.object(mcp_server, "_run_zh",
-                      return_value={"ok": True, "exit_code": 0,
-                                    "stdout_plain": "Updated", "stderr": ""}):
+
+    with patch.object(
+        mcp_server,
+        "_run_zh",
+        return_value={"ok": True, "exit_code": 0, "stdout_plain": "Updated", "stderr": ""},
+    ):
         out = mcp_server.epic_update(epic_number=42, title="New Title")
     assert "partial_applied" in out
     assert out["partial_applied"] is False
@@ -2278,12 +2084,10 @@ def test_round4_f4_bash_runner_does_not_leak_zh_rest_token(monkeypatch) -> None:
     sentinel = "developer-real-rest-token-DO-NOT-LEAK"
     monkeypatch.setenv("ZH_REST_TOKEN", sentinel)
     r = run_zh_with_stubs(
-        "", 'echo "ZH_REST_TOKEN=${ZH_REST_TOKEN:-(unset)}"',
+        "",
+        'echo "ZH_REST_TOKEN=${ZH_REST_TOKEN:-(unset)}"',
     )
-    assert sentinel not in r.stdout, (
-        f"harness leaked ZH_REST_TOKEN into the subprocess "
-        f"(round-4 #4). stdout={r.stdout!r}"
-    )
+    assert sentinel not in r.stdout, f"harness leaked ZH_REST_TOKEN into the subprocess (round-4 #4). stdout={r.stdout!r}"
 
 
 def test_v193_zh_rest_token_does_not_reach_production_zh(monkeypatch) -> None:
@@ -2310,9 +2114,8 @@ def test_v193_zh_rest_token_does_not_reach_production_zh(monkeypatch) -> None:
     sentinel = "developer-real-rest-token-DO-NOT-LEAK-PROD"
     monkeypatch.setenv("ZH_REST_TOKEN", sentinel)
 
-    # Stub the network-facing helpers so cmd_workspaces reaches and runs
-    # load_config without touching gh / the ZenHub API. resolve_gh_repo_id
-    # returns a numeric id; zh_graphql returns one workspace node.
+    # Stub the network-facing helpers so cmd_workspaces reaches and runs load_config without touching gh / the ZenHub API.
+    # resolve_gh_repo_id returns a numeric id; zh_graphql returns one workspace node.
     stubs = r"""
         get_repo_info() { printf 'acme/widgets'; }
         resolve_gh_repo_id() { printf '12345'; }
@@ -2320,30 +2123,22 @@ def test_v193_zh_rest_token_does_not_reach_production_zh(monkeypatch) -> None:
             printf '%s' '{"data":{"repositoriesByGhId":[{"workspacesConnection":{"nodes":[{"id":"w","name":"TestWS"}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}]}}'
         }
     """
-    # Run cmd_workspaces (exercises load_config), then echo ZH_REST_TOKEN
-    # as the production-sourced shell sees it after config sourcing. If a
-    # leak reached the var via load_config, the sentinel would appear.
+    # Run cmd_workspaces (exercises load_config), then echo ZH_REST_TOKEN as the production-sourced shell sees it after config
+    # sourcing. If a leak reached the var via load_config, the sentinel would appear.
     r = run_zh_with_stubs(
         stubs,
-        'cmd_workspaces >/dev/null 2>&1; '
-        'printf "REST_TOKEN_INSIDE=%s\\n" "${ZH_REST_TOKEN:-(unset)}"',
+        'cmd_workspaces >/dev/null 2>&1; printf "REST_TOKEN_INSIDE=%s\\n" "${ZH_REST_TOKEN:-(unset)}"',
     )
     assert sentinel not in r.stdout, (
-        f"production-sourced shell saw the leaked ZH_REST_TOKEN "
-        f"sentinel in its env (round-4 #4 invariant broken). "
-        f"stdout={r.stdout!r}"
+        f"production-sourced shell saw the leaked ZH_REST_TOKEN sentinel in its env (round-4 #4 invariant broken). stdout={r.stdout!r}"
     )
-    assert sentinel not in r.stderr, (
-        f"production-sourced shell leaked ZH_REST_TOKEN to stderr. "
-        f"stderr={r.stderr!r}"
-    )
+    assert sentinel not in r.stderr, f"production-sourced shell leaked ZH_REST_TOKEN to stderr. stderr={r.stderr!r}"
     assert "REST_TOKEN_INSIDE=" in r.stdout, (
-        f"sanity: production-sourced shell should have echoed the "
-        f"inner ZH_REST_TOKEN value. got stdout={r.stdout!r}"
+        f"sanity: production-sourced shell should have echoed the inner ZH_REST_TOKEN value. got stdout={r.stdout!r}"
     )
 
 
-# ---- Finding #11: _planning_update validation-path missing 'raw' -----------
+    # ---- Finding #11: _planning_update validation-path missing 'raw' -----------
 
 
 def test_round7_f11_planning_update_validation_includes_raw() -> None:
@@ -2353,13 +2148,12 @@ def test_round7_f11_planning_update_validation_includes_raw() -> None:
     import mcp_server
 
     out = mcp_server.epic_update(
-        epic_number=42, title="", description="",
+        epic_number=42,
+        title="",
+        description="",
     )
     assert out["ok"] is False
-    assert "raw" in out, (
-        f"_planning_update validation must include raw (round-7 #11); "
-        f"got {sorted(out.keys())!r}"
-    )
+    assert "raw" in out, f"_planning_update validation must include raw (round-7 #11); got {sorted(out.keys())!r}"
 
 
 def test_round7_f11_initiative_update_validation_includes_raw() -> None:
@@ -2367,12 +2161,14 @@ def test_round7_f11_initiative_update_validation_includes_raw() -> None:
     import mcp_server
 
     out = mcp_server.initiative_update(
-        number=42, title="", description="",
+        number=42,
+        title="",
+        description="",
     )
     assert "raw" in out
 
 
-# ---- Finding #12: parent-wire envelope hides root-cause stderr -------------
+    # ---- Finding #12: parent-wire envelope hides root-cause stderr -------------
 
 
 def test_round7_f12_parent_wire_failure_surfaces_root_cause() -> None:
@@ -2419,21 +2215,10 @@ def test_round7_f12_parent_wire_failure_surfaces_root_cause() -> None:
         'cmd_create "$@"',
         args=["Title", "-t", "Bug", "-b", "body", "--parent", "7"],
     )
-    # The fix must surface "Invalid token" INSIDE the Warning: line
-    # that mentions the attach failure (the `(cause: ...)` clause).
-    #
-    # v1.9.2 round-1 (PR #27) finding #7: the prior assertion just
-    # checked the substring anywhere in stderr. If a regression
-    # removed the stderr capture (`2>"$_sub_err_file"`), the stub's
-    # stderr would flow directly to the parent process — `"Invalid
-    # token"` would still appear, but via the RAW leak, not via
-    # the warn's cause clause. Test passed, fix silently undone.
-    # Now require both substrings on the SAME line.
+    # The fix must surface "Invalid token" INSIDE the Warning: line that mentions the attach failure (the `(cause: ...)` clause).  v1.9.2 round-1 (PR #27) finding #7: the prior assertion just checked the substring anywhere in stderr. If a regression removed the stderr capture
+    # (`2>"$_sub_err_file"`), the stub's stderr would flow directly to the parent process — `"Invalid token"` would still appear, but via the RAW leak, not via the warn's cause clause. Test passed, fix silently undone. Now require both substrings on the SAME line.
     stderr_clean = r.stderr.replace("\x1b[0;33m", "").replace("\x1b[0m", "")
-    matched = [
-        line for line in stderr_clean.splitlines()
-        if "could not attach" in line and "Invalid token" in line
-    ]
+    matched = [line for line in stderr_clean.splitlines() if "could not attach" in line and "Invalid token" in line]
     assert matched, (
         f"F12 fix not in place: expected a single Warning line "
         f"mentioning both 'could not attach' AND the root-cause "
@@ -2441,7 +2226,7 @@ def test_round7_f12_parent_wire_failure_surfaces_root_cause() -> None:
     )
 
 
-# ---- Finding #13: warn/error use echo -e and corrupt embedded JSON ---------
+    # ---- Finding #13: warn/error use echo -e and corrupt embedded JSON ---------
 
 
 def test_round7_f13_warn_does_not_escape_interpret_embedded_json() -> None:
@@ -2453,51 +2238,28 @@ def test_round7_f13_warn_does_not_escape_interpret_embedded_json() -> None:
     Fix: switch `warn` (and `error` / `info` / `success`) to
     `printf '%s\\n'`.
     """
-    # Source zh and call warn directly with a payload containing \n.
-    #
-    # v1.9.2 round-1 (PR #27) finding #4: a previous version used
-    # Python's `repr()` to quote the bash arg, which produced a
-    # double-backslash sequence (`\\n` = four bytes: \\ \\ n n) inside
-    # the bash literal. `echo -e` collapsed that back to two bytes
-    # (`\\` \\ `n` -> `\\n`), so the test passed against pre-fix
-    # production. The real shape we need is two bytes: literal
-    # backslash + literal n, exactly the way `jq -c` emits a JSON
-    # string value containing a `\\n` escape. Use a single-quoted
-    # bash literal so $1 contains the same two-byte sequence.
+    # Source zh and call warn directly with a payload containing \n.  v1.9.2 round-1 (PR #27) finding #4: a previous version used Python's `repr()` to quote the bash arg, which produced a double-backslash sequence (`\\n` = four bytes: \\ \\ n n) inside the bash literal. `echo -e` collapsed that back to two bytes (`\\` \\ `n` ->
+    # `\\n`), so the test passed against pre-fix production. The real shape we need is two bytes: literal backslash + literal n, exactly the way `jq -c` emits a JSON string value containing a `\\n` escape. Use a single-quoted bash literal so $1 contains the same two-byte sequence.
     stubs = r""
     payload = r'{"message":"permission denied:\nrepo is archived"}'
-    # Single-quoted in bash: contents are literal, no escape
-    # interpretation. The `\n` inside the JSON stays as two
-    # characters (backslash + n).
+    # Single-quoted in bash: contents are literal, no escape interpretation. The `\n` inside the JSON
+    # stays as two characters (backslash + n).
     r = run_zh_with_stubs(
         stubs,
         f"warn 'got error: {payload}'",
     )
     # Strip the ANSI color sequences if they ever made it through.
-    stderr_clean = r.stderr.replace("\x1b[0;33m", "").replace(
-        "\x1b[0m", "")
-    # The literal substring `\n` MUST be preserved (4 bytes:
-    # backslash, n), not rendered as a real newline. After printf
-    # '%s\n', the embedded `\n` is intact; under echo -e it became
-    # a real newline character.
-    assert r"\n" in stderr_clean, (
-        f"warn must NOT interpret embedded \\n (round-7 #13). "
-        f"stderr={r.stderr!r}"
-    )
+    stderr_clean = r.stderr.replace("\x1b[0;33m", "").replace("\x1b[0m", "")
+    # The literal substring `\n` MUST be preserved (4 bytes: backslash, n), not rendered as a real newline. After printf '%s\n', the
+    # embedded `\n` is intact; under echo -e it became a real newline character.
+    assert r"\n" in stderr_clean, f"warn must NOT interpret embedded \\n (round-7 #13). stderr={r.stderr!r}"
     # The whole payload must be on a single line.
-    relevant_lines = [
-        line for line in stderr_clean.splitlines()
-        if "permission denied" in line
-    ]
-    assert len(relevant_lines) == 1, (
-        f"warn fragmented its single-line payload across "
-        f"{len(relevant_lines)} lines (round-7 #13). "
-        f"stderr={r.stderr!r}"
-    )
+    relevant_lines = [line for line in stderr_clean.splitlines() if "permission denied" in line]
+    assert len(relevant_lines) == 1, f"warn fragmented its single-line payload across {len(relevant_lines)} lines (round-7 #13). stderr={r.stderr!r}"
     assert "repo is archived" in relevant_lines[0]
 
 
-# ---- Finding #14: update-verb redirect points at read-only zh issue --------
+    # ---- Finding #14: update-verb redirect points at read-only zh issue --------
 
 
 def test_round7_f14_update_verb_does_not_redirect_to_read_only_issue() -> None:
@@ -2521,25 +2283,14 @@ def test_round7_f14_update_verb_does_not_redirect_to_read_only_issue() -> None:
     r = run_zh_with_stubs(
         stubs,
         # expected_type=Epic, issue=42, repo_id=R, verb=update.
-        'zh_hierarchy_warn_type_mismatch Epic 42 R update',
+        "zh_hierarchy_warn_type_mismatch Epic 42 R update",
     )
-    # The fix can take one of two shapes. Either:
-    #  (a) the warn does not mention `zh issue 42` as a redirect, or
-    #  (b) the warn redirects to `zh type 42 <NounType>` for retype.
-    # Strip ANSI color codes from the warn so the match is robust.
+    # The fix can take one of two shapes. Either: (a) the warn does not mention `zh issue 42` as a redirect, or (b) the warn redirects to `zh type 42
+    # <NounType>` for retype. Strip ANSI color codes from the warn so the match is robust.
     stderr_clean = r.stderr.replace("\x1b[0;33m", "").replace("\x1b[0m", "")
-    assert "zh issue 42" not in stderr_clean, (
-        f"update-verb redirect must not point at read-only 'zh issue' "
-        f"(round-7 #14). stderr={r.stderr!r}"
-    )
-    # v1.9.2 round-1 (PR #27) finding #13: pin positive behavior.
-    # v1.9.2 round-2 (PR #27) finding #1: also require the
-    # rendered command to be runnable — `zh type 42 Epic`, NOT
-    # `zh type 42 <NounType>` with a literal placeholder. The
-    # expected_type was `Epic` in this call; the warn must
-    # interpolate it into the retype suggestion. Without this
-    # check, a regression that emits a literal `<NounType>` token
-    # (or any non-interpolated placeholder) passes silently.
+    assert "zh issue 42" not in stderr_clean, f"update-verb redirect must not point at read-only 'zh issue' (round-7 #14). stderr={r.stderr!r}"
+    # v1.9.2 round-1 (PR #27) finding #13: pin positive behavior. v1.9.2 round-2 (PR #27) finding #1: also require the rendered command to be runnable — `zh type 42 Epic`, NOT `zh type 42 <NounType>` with a literal placeholder. The expected_type was `Epic` in
+    # this call; the warn must interpolate it into the retype suggestion. Without this check, a regression that emits a literal `<NounType>` token (or any non-interpolated placeholder) passes silently.
     assert "zh type 42 Epic" in stderr_clean, (
         f"F14 retype suggestion must render the runnable command "
         f"'zh type 42 Epic' (expected_type was 'Epic'), not a "
@@ -2547,37 +2298,12 @@ def test_round7_f14_update_verb_does_not_redirect_to_read_only_issue() -> None:
     )
     # Negative guard: literal placeholder tokens must NOT leak through.
     assert "<NounType>" not in stderr_clean, (
-        f"F14 must not emit a literal <NounType> placeholder; "
-        f"interpolate ${{expected_type}}. Got: {stderr_clean!r}"
+        f"F14 must not emit a literal <NounType> placeholder; interpolate ${{expected_type}}. Got: {stderr_clean!r}"
     )
 
 
-# ---- Finding #15: stale exit-1 partial-applied snippets ---------------------
-#
-# This is enforced by DELETION in test_zh_bash_regression.py, not by
-# a positive test. The structural-guarantee test at the top of this
-# file (test_structural_guarantee_set_type_exits_2_not_1_on_partial)
-# pins the production contract; with the stale snippets gone, the
-# legacy test file no longer contradicts production.
-
-
-# ===========================================================================
-# v1.9.2 PROOF-OF-DRIFT: a test that would have caught round-4's
-# orphan-script bug. We don't ship it as a runtime test (it's
-# illustrative), but the SHAPE of test_round7_f5_* and
-# test_structural_guarantee_* above is exactly what would have
-# failed against the pre-round-6 production code.
-# ===========================================================================
-
-
-# ===========================================================================
-# PR #27 ROUND-2 FINDING CLOSURES
-#
-# Each test below pins a HIGH finding the round-2 review surfaced.
-# ===========================================================================
-
-
-# ---- Round-2 finding #2: create_issue empty-title/body validation shape ----
+    # ---- Finding #15: stale exit-1 partial-applied snippets ---------------------  This is enforced by DELETION in test_zh_bash_regression.py, not by a positive test. The structural-guarantee test at the top of this file
+    # (test_structural_guarantee_set_type_exits_2_not_1_on_partial) pins the production contract; with the stale snippets gone, the legacy test file no longer contradicts production.
 
 
 def test_round2_f2_create_issue_empty_title_returns_full_key_set() -> None:
@@ -2592,13 +2318,20 @@ def test_round2_f2_create_issue_empty_title_returns_full_key_set() -> None:
 
     out = mcp_server.create_issue(title="", body="non-empty body")
     assert out["ok"] is False
-    for key in ("number", "url", "type", "pipeline", "parent",
-                "estimate", "estimate_requested",
-                "priority", "priority_requested", "raw", "stderr"):
-        assert key in out, (
-            f"create_issue empty-title validation missing {key!r} "
-            f"(round-2 #2); got {sorted(out.keys())!r}"
-        )
+    for key in (
+        "number",
+        "url",
+        "type",
+        "pipeline",
+        "parent",
+        "estimate",
+        "estimate_requested",
+        "priority",
+        "priority_requested",
+        "raw",
+        "stderr",
+    ):
+        assert key in out, f"create_issue empty-title validation missing {key!r} (round-2 #2); got {sorted(out.keys())!r}"
 
 
 def test_round2_f2_create_issue_empty_body_returns_full_key_set() -> None:
@@ -2611,16 +2344,23 @@ def test_round2_f2_create_issue_empty_body_returns_full_key_set() -> None:
 
     out = mcp_server.create_issue(title="ok", body="")
     assert out["ok"] is False
-    for key in ("number", "url", "type", "pipeline", "parent",
-                "estimate", "estimate_requested",
-                "priority", "priority_requested", "raw", "stderr"):
-        assert key in out, (
-            f"create_issue empty-body validation missing {key!r}; "
-            f"got {sorted(out.keys())!r}"
-        )
+    for key in (
+        "number",
+        "url",
+        "type",
+        "pipeline",
+        "parent",
+        "estimate",
+        "estimate_requested",
+        "priority",
+        "priority_requested",
+        "raw",
+        "stderr",
+    ):
+        assert key in out, f"create_issue empty-body validation missing {key!r}; got {sorted(out.keys())!r}"
 
 
-# ---- Round-2 finding #3: _planning_create empty-title validation shape -----
+        # ---- Round-2 finding #3: _planning_create empty-title validation shape -----
 
 
 def test_round2_f3_epic_create_empty_title_returns_full_key_set() -> None:
@@ -2637,13 +2377,20 @@ def test_round2_f3_epic_create_empty_title_returns_full_key_set() -> None:
 
     out = mcp_server.epic_create(title="")
     assert out["ok"] is False
-    for key in ("number", "url", "type", "pipeline", "parent",
-                "estimate", "estimate_requested",
-                "priority", "priority_requested", "raw", "stderr"):
-        assert key in out, (
-            f"_planning_create empty-title validation missing {key!r} "
-            f"(round-2 #3); got {sorted(out.keys())!r}"
-        )
+    for key in (
+        "number",
+        "url",
+        "type",
+        "pipeline",
+        "parent",
+        "estimate",
+        "estimate_requested",
+        "priority",
+        "priority_requested",
+        "raw",
+        "stderr",
+    ):
+        assert key in out, f"_planning_create empty-title validation missing {key!r} (round-2 #3); got {sorted(out.keys())!r}"
 
 
 def test_round2_f3_initiative_create_empty_title_returns_full_key_set() -> None:
@@ -2657,22 +2404,31 @@ def test_round2_f3_initiative_create_empty_title_returns_full_key_set() -> None:
     """
     import mcp_server
 
-    for fn in (mcp_server.epic_create,
-               mcp_server.initiative_create,
-               mcp_server.project_create,
-               mcp_server.subtask_create):
+    for fn in (
+        mcp_server.epic_create,
+        mcp_server.initiative_create,
+        mcp_server.project_create,
+        mcp_server.subtask_create,
+    ):
         out = fn(title="")
         assert out["ok"] is False
-        for key in ("number", "url", "type", "pipeline", "parent",
-                    "estimate", "estimate_requested",
-                    "priority", "priority_requested", "raw", "stderr"):
-            assert key in out, (
-                f"{fn.__name__} empty-title validation missing {key!r} "
-                f"(round-2 #3); got {sorted(out.keys())!r}"
-            )
+        for key in (
+            "number",
+            "url",
+            "type",
+            "pipeline",
+            "parent",
+            "estimate",
+            "estimate_requested",
+            "priority",
+            "priority_requested",
+            "raw",
+            "stderr",
+        ):
+            assert key in out, f"{fn.__name__} empty-title validation missing {key!r} (round-2 #3); got {sorted(out.keys())!r}"
 
 
-# ---- Round-2 finding #7: structural set_type test broaden coverage ---------
+            # ---- Round-2 finding #7: structural set_type test broaden coverage ---------
 
 
 def test_round2_f7_set_type_partial_via_github_errors_only_exits_2() -> None:
@@ -2699,11 +2455,9 @@ def test_round2_f7_set_type_partial_via_github_errors_only_exits_2() -> None:
             printf '%s' '{"data":{"changeIssueTypeOfIssues":{"successCount":1,"failedIssues":[],"githubErrors":[{"code":"X","message":"oops"}]}}}'
         }
     """
-    r = run_zh_with_stubs(stubs, 'cmd_set_type 42 Epic')
+    r = run_zh_with_stubs(stubs, "cmd_set_type 42 Epic")
     assert r.returncode == 2, (
-        f"githubErrors-populated partial MUST exit 2 (the gate is "
-        f"failed_count > 0 OR gh_errors_len > 0); got rc={r.returncode}, "
-        f"stderr={r.stderr!r}"
+        f"githubErrors-populated partial MUST exit 2 (the gate is failed_count > 0 OR gh_errors_len > 0); got rc={r.returncode}, stderr={r.stderr!r}"
     )
     assert "Partially applied" in r.stderr
 
@@ -2728,15 +2482,9 @@ def test_round3_f6_set_type_clean_success_exits_0() -> None:
             printf '%s' '{"data":{"changeIssueTypeOfIssues":{"successCount":1,"failedIssues":[],"githubErrors":[]}}}'
         }
     """
-    r = run_zh_with_stubs(stubs, 'cmd_set_type 42 Epic')
-    assert r.returncode == 0, (
-        f"clean success MUST exit 0; got rc={r.returncode}, "
-        f"stderr={r.stderr!r}, stdout={r.stdout!r}"
-    )
-    assert "Set type of #42 to Epic" in r.stdout, (
-        f"clean success must print the 'Set type' success line; "
-        f"got stdout={r.stdout!r}"
-    )
+    r = run_zh_with_stubs(stubs, "cmd_set_type 42 Epic")
+    assert r.returncode == 0, f"clean success MUST exit 0; got rc={r.returncode}, stderr={r.stderr!r}, stdout={r.stdout!r}"
+    assert "Set type of #42 to Epic" in r.stdout, f"clean success must print the 'Set type' success line; got stdout={r.stdout!r}"
 
 
 def test_round2_f7_set_type_success_count_zero_exits_1() -> None:
@@ -2757,28 +2505,13 @@ def test_round2_f7_set_type_success_count_zero_exits_1() -> None:
             printf '%s' '{"data":{"changeIssueTypeOfIssues":{"successCount":0,"failedIssues":[{"number":42}],"githubErrors":[]}}}'
         }
     """
-    r = run_zh_with_stubs(stubs, 'cmd_set_type 42 Epic')
-    assert r.returncode == 1, (
-        f"successCount=0 is a hard failure and MUST exit 1, not 2; "
-        f"got rc={r.returncode}, stderr={r.stderr!r}"
-    )
+    r = run_zh_with_stubs(stubs, "cmd_set_type 42 Epic")
+    assert r.returncode == 1, f"successCount=0 is a hard failure and MUST exit 1, not 2; got rc={r.returncode}, stderr={r.stderr!r}"
     assert "Failed to set type" in r.stderr
 
 
-# ---- Round-2 finding #9: migrate _SET_TYPE_EXIT_2_SNIPPET --------------------
-#
-# The two production tests above (test_round2_f7_*) plus the existing
-# test_structural_guarantee_set_type_exits_2_not_1_on_partial cover
-# the same gate-paths the legacy `_SET_TYPE_EXIT_2_SNIPPET` covered,
-# but against PRODUCTION cmd_set_type instead of a parallel
-# re-implementation. The legacy snippet and its companion tests are
-# left in place for now (they still pass against their own embedded
-# code) but the canonical coverage is here.
-
-
-# ===========================================================================
-# v1.9.6 tech-debt closeout: sentinel hardening (#37, #38, #39).
-# ===========================================================================
+    # ---- Round-2 finding #9: migrate _SET_TYPE_EXIT_2_SNIPPET --------------------  The two production tests above (test_round2_f7_*) plus the existing test_structural_guarantee_set_type_exits_2_not_1_on_partial cover the same gate-paths the legacy `_SET_TYPE_EXIT_2_SNIPPET` covered, but
+    # against PRODUCTION cmd_set_type instead of a parallel re-implementation. The legacy snippet and its companion tests are left in place for now (they still pass against their own embedded code) but the canonical coverage is here.
 
 
 def test_v196_parse_sentinel_handles_bare_cr_line_ending() -> None:
@@ -2791,32 +2524,33 @@ def test_v196_parse_sentinel_handles_bare_cr_line_ending() -> None:
     import mcp_server
 
     assert mcp_server._parse_outcome_sentinel("__ZH_OUTCOME__:noop\r") == "noop"
-    assert mcp_server._parse_outcome_sentinel(
-        "progress\r__ZH_OUTCOME__:ok\r") == "ok"
-    assert mcp_server._parse_outcome_sentinel(
-        "line\r\n__ZH_OUTCOME__:partial\r\n") == "partial"
+    assert mcp_server._parse_outcome_sentinel("progress\r__ZH_OUTCOME__:ok\r") == "ok"
+    assert mcp_server._parse_outcome_sentinel("line\r\n__ZH_OUTCOME__:partial\r\n") == "partial"
     # last-match-wins still holds across mixed line endings
-    assert mcp_server._parse_outcome_sentinel(
-        "__ZH_OUTCOME__:ok\r__ZH_OUTCOME__:fail\r") == "fail"
+    assert mcp_server._parse_outcome_sentinel("__ZH_OUTCOME__:ok\r__ZH_OUTCOME__:fail\r") == "fail"
 
 
-def test_v196_parse_sentinel_unknown_outcome_logs_via_logging(caplog) -> None:
-    """Issue #39: an unknown outcome word is routed through `logging`
+def test_v196_parse_sentinel_unknown_outcome_logs_via_logging() -> None:
+    """Issue #39: an unknown outcome word is routed through loguru
     (a configurable handler), not a raw stderr write that collides with
     FastMCP's framing-adjacent stderr. The parser still returns None so
     the caller falls back to inference.
     """
-    import logging
+    import io
+
+    from loguru import logger
+
     import mcp_server
 
-    with caplog.at_level(logging.WARNING, logger="mcp_server"):
+    buffer = io.StringIO()
+    handler_id = logger.add(buffer, level="WARNING", format="{message}")
+    try:
         result = mcp_server._parse_outcome_sentinel("__ZH_OUTCOME__:bogus\n")
+    finally:
+        logger.remove(handler_id)
 
     assert result is None
-    assert any(
-        rec.levelno == logging.WARNING and "bogus" in rec.getMessage()
-        for rec in caplog.records
-    ), f"expected a logged WARNING naming the unknown outcome; got {caplog.records!r}"
+    assert "bogus" in buffer.getvalue()
 
 
 def test_v196_planning_add_children_guards_contradictory_ok_plus_exit2() -> None:
@@ -2827,6 +2561,7 @@ def test_v196_planning_add_children_guards_contradictory_ok_plus_exit2() -> None
     guard makes the partial signal win: added stays empty.
     """
     from unittest.mock import patch
+
     import mcp_server
 
     contradictory = {
@@ -2839,15 +2574,11 @@ def test_v196_planning_add_children_guards_contradictory_ok_plus_exit2() -> None
     }
     with patch.object(mcp_server, "_run_zh", return_value=contradictory):
         out = mcp_server.epic_add_children(
-            epic_number=42, issue_numbers=[100, 101],
+            epic_number=42,
+            issue_numbers=[100, 101],
         )
-    assert out["partial_applied"] is True, (
-        f"exit 2 must surface partial_applied=True; got {out['partial_applied']!r}"
-    )
-    assert out["added"] == [], (
-        f"contradictory ok+exit2 must NOT credit children as added "
-        f"(issue #37 guard); got added={out['added']!r}"
-    )
+    assert out["partial_applied"] is True, f"exit 2 must surface partial_applied=True; got {out['partial_applied']!r}"
+    assert out["added"] == [], f"contradictory ok+exit2 must NOT credit children as added (issue #37 guard); got added={out['added']!r}"
     assert out["added_requested"] == [100, 101]
 
 
@@ -2856,6 +2587,7 @@ def test_v196_planning_remove_children_guards_contradictory_ok_plus_exit2() -> N
     empty when a sentinel-ok envelope arrives with exit 2.
     """
     from unittest.mock import patch
+
     import mcp_server
 
     contradictory = {
@@ -2867,11 +2599,1374 @@ def test_v196_planning_remove_children_guards_contradictory_ok_plus_exit2() -> N
     }
     with patch.object(mcp_server, "_run_zh", return_value=contradictory):
         out = mcp_server.epic_remove_children(
-            epic_number=42, issue_numbers=[100, 101],
+            epic_number=42,
+            issue_numbers=[100, 101],
         )
     assert out["partial_applied"] is True
-    assert out["removed"] == [], (
-        f"contradictory ok+exit2 must NOT credit children as removed "
-        f"(issue #37 guard); got removed={out['removed']!r}"
-    )
+    assert out["removed"] == [], f"contradictory ok+exit2 must NOT credit children as removed (issue #37 guard); got removed={out['removed']!r}"
     assert out["removed_requested"] == [100, 101]
+
+
+_ISSUE_VIEW_FIXTURE = r"""
+{
+  "data": {
+    "issueByInfo": {
+      "id": "issue-gid-42",
+      "number": 42,
+      "title": "Login fails with &",
+      "body": "BODY_PLACEHOLDER",
+      "state": "OPEN",
+      "htmlUrl": "https://github.com/acme/widgets/issues/42",
+      "estimate": {"value": 3},
+      "issueType": {"__typename": "ZenhubIssueType", "name": "Bug", "level": 4, "disposition": "BOARD"},
+      "assignees": {"nodes": [{"login": "alice", "name": "Alice"}]},
+      "labels": {"nodes": [{"name": "bug", "color": "ff0000"}]},
+      "pipelineIssue": {
+        "pipeline": {"name": "In Progress"},
+        "priority": {"name": "High"}
+      },
+      "blockingIssues": {"nodes": []},
+      "blockedIssues": {"nodes": []},
+      "parentIssue": null,
+      "githubChildIssues": {"totalCount": 0},
+      "createdAt": "2026-05-01T00:00:00Z",
+      "updatedAt": "2026-05-12T00:00:00Z"
+    }
+  }
+}
+"""
+
+
+def _issue_view_stubs(*, body: str, gh_fail: bool = False) -> tuple[str, str]:
+    """Build stubs for cmd_issue: GraphQL fixture + gh issue view.
+
+    Returns (stubs_bash, fixture_json). The body is JSON-escaped into
+    the fixture so special chars (quotes, newlines, leading -e) survive.
+    """
+    fixture = _ISSUE_VIEW_FIXTURE.replace(
+        '"BODY_PLACEHOLDER"',
+        json.dumps(body),
+    )
+    gh_stub = (
+        r"""
+        gh() {
+            if [[ "$1" == "issue" && "$2" == "view" ]]; then
+                # Mimic `gh ... --jq EXPR`: apply the expression ourselves.
+                local jq_expr=""
+                local i=1
+                while [[ $i -le $# ]]; do
+                    eval "local arg=\${$i}"
+                    if [[ "$arg" == "--jq" ]]; then
+                        eval "jq_expr=\${$((i+1))}"
+                        break
+                    fi
+                    i=$((i+1))
+                done
+                local payload
+                payload=$(printf '%s' "{\"comments\": $STUB_COMMENTS}")
+                if [[ -n "$jq_expr" ]]; then
+                    printf '%s' "$payload" | jq -c "$jq_expr"
+                else
+                    printf '%s' "$payload"
+                fi
+                return 0
+            fi
+            return 0
+        }
+        """
+        if not gh_fail
+        else r"""
+        gh() { return 1; }
+        """
+    )
+    stubs = f"""
+        load_config() {{ :; }}
+        get_repo_info() {{ printf 'acme/widgets'; }}
+        get_repo_id() {{ printf 'repo-gid'; }}
+        get_workspace_id() {{ printf 'ws-gid'; }}
+        build_zenhub_url() {{ printf 'https://app.zenhub.com/workspaces/%s/issues/gh/%s/%s' "$1" "$2" "$3"; }}
+        zh_graphql() {{ printf '%s' "$STUB_ISSUE_JSON"; }}
+        {gh_stub}
+    """
+    return stubs, fixture
+
+
+def test_issue_view_renders_description() -> None:
+    """cmd_issue prints the GraphQL body under a Description: heading."""
+    stubs, fixture = _issue_view_stubs(
+        body="Users report login failing when password contains &.",
+    )
+    r = run_zh_with_stubs(
+        stubs,
+        "cmd_issue 42",
+        extra_env={
+            "STUB_ISSUE_JSON": fixture,
+            "STUB_COMMENTS": "[]",
+        },
+    )
+    assert r.returncode == 0, f"stderr={r.stderr!r} stdout={r.stdout!r}"
+    assert "Description:" in r.stdout
+    assert "Users report login failing when password contains &." in r.stdout
+    assert "Comments" not in r.stdout  # empty list → omit section
+
+
+def test_issue_view_description_flag_safe() -> None:
+    """A body starting with -e must render literally (printf, not echo)."""
+    stubs, fixture = _issue_view_stubs(body="-e first line\nsecond line")
+    r = run_zh_with_stubs(
+        stubs,
+        "cmd_issue 42",
+        extra_env={
+            "STUB_ISSUE_JSON": fixture,
+            "STUB_COMMENTS": "[]",
+        },
+    )
+    assert r.returncode == 0, f"stderr={r.stderr!r}"
+    assert "  -e first line" in r.stdout
+    assert "  second line" in r.stdout
+
+
+def test_issue_view_omits_description_when_empty() -> None:
+    """Empty body → no Description: section (matches prior hierarchy show)."""
+    stubs, fixture = _issue_view_stubs(body="")
+    r = run_zh_with_stubs(
+        stubs,
+        "cmd_issue 42",
+        extra_env={
+            "STUB_ISSUE_JSON": fixture,
+            "STUB_COMMENTS": "[]",
+        },
+    )
+    assert r.returncode == 0
+    assert "Description:" not in r.stdout
+
+
+def test_issue_view_renders_comments() -> None:
+    """Comments from gh issue view --json are listed with author + date."""
+    comments = (
+        '[{"author":{"login":"bob"},"createdAt":"2026-05-12T15:30:00Z",'
+        '"body":"Fixed in PR #99"},'
+        '{"author":{"login":"carol"},"createdAt":"2026-05-13T09:00:00Z",'
+        '"body":"-n looks like an echo flag"}]'
+    )
+    stubs, fixture = _issue_view_stubs(body="desc")
+    r = run_zh_with_stubs(
+        stubs,
+        "cmd_issue 42",
+        extra_env={
+            "STUB_ISSUE_JSON": fixture,
+            "STUB_COMMENTS": comments,
+        },
+    )
+    assert r.returncode == 0, f"stderr={r.stderr!r} stdout={r.stdout!r}"
+    assert "Comments (2):" in r.stdout
+    assert "1. @bob" in r.stdout
+    assert "2026-05-12" in r.stdout
+    assert "Fixed in PR #99" in r.stdout
+    assert "2. @carol" in r.stdout
+    assert "    -n looks like an echo flag" in r.stdout
+
+
+def test_issue_view_gh_failure_soft_fails_comments() -> None:
+    """Unauthenticated/missing gh warns but still shows the issue."""
+    stubs, fixture = _issue_view_stubs(body="still visible", gh_fail=True)
+    r = run_zh_with_stubs(
+        stubs,
+        "cmd_issue 42",
+        extra_env={
+            "STUB_ISSUE_JSON": fixture,
+            "STUB_COMMENTS": "[]",
+        },
+    )
+    assert r.returncode == 0, f"stderr={r.stderr!r}"
+    assert "still visible" in r.stdout
+    assert "Could not fetch comments" in r.stderr
+    assert "Comments" not in r.stdout
+
+
+def test_sort_issues_by_pipeline_then_id_helper() -> None:
+    """zh_sort_issues_by_pipeline_then_id: board order → repo → number."""
+    stubs = r"""
+        # no stubs needed — call the helper directly
+    """
+    issues = (
+        '[{"number":1,"pipeline":"In Progress","title":"b",'
+        '"repository":{"ownerName":"acme","name":"bravo"}},'
+        '{"number":1,"pipeline":"In Progress","title":"a",'
+        '"repository":{"ownerName":"acme","name":"alpha"}},'
+        '{"number":50,"pipeline":"Done","title":"d",'
+        '"repository":{"ownerName":"acme","name":"widgets"}},'
+        '{"number":10,"pipeline":"In Progress","title":"ip-hi",'
+        '"repository":{"ownerName":"acme","name":"widgets"}},'
+        '{"number":5,"pipeline":"In Progress","title":"ip-lo",'
+        '"repository":{"ownerName":"acme","name":"widgets"}},'
+        '{"number":30,"pipeline":"New Issues","title":"ni",'
+        '"repository":{"ownerName":"acme","name":"widgets"}},'
+        '{"number":99,"pipeline":null,"title":"orphan",'
+        '"repository":{"ownerName":"acme","name":"widgets"}}]'
+    )
+    order = '["New Issues","In Progress","Done"]'
+    r = run_zh_with_stubs(
+        stubs,
+        'printf "%s" "$STUB_ISSUES" | zh_sort_issues_by_pipeline_then_id "$STUB_ORDER"',
+        extra_env={"STUB_ISSUES": issues, "STUB_ORDER": order},
+    )
+    assert r.returncode == 0, f"stderr={r.stderr!r} stdout={r.stdout!r}"
+    import json as _json
+
+    got = [
+        (
+            x["pipeline"],
+            f"{x['repository']['ownerName']}/{x['repository']['name']}",
+            x["number"],
+        )
+        for x in _json.loads(r.stdout)
+    ]
+    assert got == [
+        ("New Issues", "acme/widgets", 30),
+        ("In Progress", "acme/alpha", 1),
+        ("In Progress", "acme/bravo", 1),
+        ("In Progress", "acme/widgets", 5),
+        ("In Progress", "acme/widgets", 10),
+        ("Done", "acme/widgets", 50),
+        (None, "acme/widgets", 99),
+    ]
+
+
+def test_browse_sort_tsv_by_pipeline_then_id() -> None:
+    """zh_browse_sort_tsv: board pipeline → repo → # (cols: pipe,repo,#,…)."""
+    stubs = ""
+    # TSV: pipeline, repo, number, pts, assignees, title, url
+    tsv = (
+        "In Progress\tother/z\t1\t3\ta\tz-one\thttps://x/z/1\n"
+        "In Progress\tacme/a\t1\t3\ta\ta-one\thttps://x/a/1\n"
+        "Done\tacme/w\t50\t3\ta\tdone-hi\thttps://x/50\n"
+        "In Progress\tacme/w\t10\t3\ta\tip-hi\thttps://x/10\n"
+        "In Progress\tacme/w\t5\t3\ta\tip-lo\thttps://x/5\n"
+        "New Issues\tacme/w\t30\t3\ta\tni\thttps://x/30\n"
+    )
+    order = '["New Issues","In Progress","Done"]'
+    r = run_zh_with_stubs(
+        stubs,
+        'printf "%s" "$STUB_TSV" | zh_browse_sort_tsv "$STUB_ORDER"',
+        extra_env={"STUB_TSV": tsv, "STUB_ORDER": order},
+    )
+    assert r.returncode == 0, f"stderr={r.stderr!r} stdout={r.stdout!r}"
+    rows = [line.split("\t") for line in r.stdout.strip().splitlines()]
+    keys = [(r[0], r[1], r[2]) for r in rows]
+    assert keys == [
+        ("New Issues", "acme/w", "30"),
+        ("In Progress", "acme/a", "1"),
+        ("In Progress", "acme/w", "5"),
+        ("In Progress", "acme/w", "10"),
+        ("In Progress", "other/z", "1"),
+        ("Done", "acme/w", "50"),
+    ]
+
+
+def test_browse_tsv_column_order_pipeline_repo_id() -> None:
+    """zh_browse_tsv emits pipeline, repo, number as the first three cols."""
+    stubs = ""
+    issues = (
+        '[{"number":42,"pipeline":"In Progress","title":"t",'
+        '"estimate":{"value":3},"assignees":{"nodes":[{"login":"a"}]},'
+        '"repository":{"ownerName":"acme","name":"widgets"},'
+        '"url":"https://x/42"}]'
+    )
+    r = run_zh_with_stubs(
+        stubs,
+        'printf "%s" "$STUB_ISSUES" | zh_browse_tsv',
+        extra_env={"STUB_ISSUES": issues},
+    )
+    assert r.returncode == 0, f"stderr={r.stderr!r} stdout={r.stdout!r}"
+    cols = r.stdout.strip().split("\t")
+    assert cols[:3] == ["In Progress", "acme/widgets", "42"], cols
+    assert cols[5] == "t"
+    assert cols[6] == "https://x/42"
+
+
+def test_browse_pipeline_all_sorts_by_repo_then_id() -> None:
+    """Within a pipeline, browse mine/all must order by repo then #."""
+    zh = (Path(__file__).resolve().parent.parent / "lib" / "browse.sh").read_text()
+    start = zh.index("zh_browse_pipeline_all_tsv()")
+    end = zh.index("\nzh_browse_list_pipelines_json()", start)
+    block = zh[start:end]
+    assert "repository.ownerName" in block, "zh_browse_pipeline_all_tsv must sort by repo before number"
+    assert "sort_by" in block
+    # Must not be number-only (the pre-repo secondary key).
+    assert "sort_by(.number // 0)" not in block.replace(" ", "")
+
+
+def test_mine_and_sprint_use_pipeline_repo_id_sort() -> None:
+    """zh mine + zh sprint must apply pipeline → repo → # ordering."""
+    repo_root = Path(__file__).resolve().parent.parent
+    discovery = (repo_root / "lib" / "discovery.sh").read_text()
+    mine_start = discovery.index("cmd_mine()")
+    # cmd_mine's end boundary is still cmd_board — discovery order is workspaces, pipelines, mine, board, pipeline, types,
+    # users, labels, so cmd_board remains the next function after cmd_mine.
+    mine_end = discovery.index("\ncmd_board()", mine_start)
+    mine = discovery[mine_start:mine_end]
+    assert "zh_sort_issues_by_pipeline_then_id" in mine
+
+    sprints_sh = (repo_root / "lib" / "sprints.sh").read_text()
+    sprint_start = sprints_sh.index("cmd_sprint()")
+    # cmd_sprint is large; stop at cmd_sprint_current
+    sprint_end = sprints_sh.index("\ncmd_sprint_current()", sprint_start)
+    sprint = sprints_sh[sprint_start:sprint_end]
+    assert "repository.ownerName" in sprint
+    assert "sort_by" in sprint
+
+
+def test_browse_bin_resolves_to_zh_entrypoint() -> None:
+    """fzf bindings must re-exec zh, not lib/browse.sh (post-split regression)."""
+    r = run_zh_with_stubs("", "zh_browse_bin")
+    assert r.returncode == 0, r.stderr
+    resolved = Path(r.stdout.strip()).resolve()
+    expected = (Path(__file__).resolve().parent.parent / "zh").resolve()
+    assert resolved == expected, f"zh_browse_bin returned {resolved}, expected {expected} (bindings call `$self browse _…` and need the entrypoint)"
+    assert resolved.name == "zh"
+    assert "lib/browse.sh" not in str(resolved)
+
+
+def test_browse_ui_binds_ctrl_x_close() -> None:
+    """ctrl-x must run zh_browse_close and reload the list afterward."""
+    zh = (Path(__file__).resolve().parent.parent / "lib" / "browse.sh").read_text()
+    assert "zh_browse_close()" in zh
+    assert "_close" in zh
+    start = zh.index("zh_browse_ui()")
+    end = zh.index("\nzh_browse_reload_from_prompt", start)
+    block = zh[start:end]
+    assert "ctrl-x:execute" in block and "_close" in block, "zh_browse_ui missing ctrl-x → _close binding"
+    assert "ctrl-x: close" in block, "header must document ctrl-x: close"
+    # Actions pass number+repo as fzf fields {3} {2} after column reorder.
+    assert "_preview {3} {2}" in block
+    assert "_close {3} {2}" in block or "browse _close {3} {2}" in block
+
+
+def test_browse_ui_binds_edit_and_comment_edit() -> None:
+    """ctrl-t edits issue; comment edit is via enter → issue-view, not alt-e."""
+    zh = (Path(__file__).resolve().parent.parent / "lib" / "browse.sh").read_text()
+    assert "zh_browse_edit()" in zh
+    assert "zh_browse_comment_edit()" in zh
+    assert "zh_browse_comment_lines()" in zh
+    assert "zh_browse_comment_show()" in zh
+    assert "zh_browse_issue_header_write()" in zh
+    assert "zh_browse_issue_header_max_lines()" in zh
+    assert "zh_browse_issue_full()" in zh
+    assert "zh_browse_issue_load()" in zh
+    assert "zh_browse_issue_prefetch()" in zh
+    assert "zh_browse_issue_header_retruncate()" in zh
+    assert "_edit" in zh
+    assert "_comment-edit" in zh
+    assert "_issue-full" in zh
+    start = zh.index("zh_browse_ui()")
+    end = zh.index("\nzh_browse_reload_from_prompt", start)
+    block = zh[start:end]
+    assert "ctrl-t:execute" in block and "_edit" in block, "zh_browse_ui missing ctrl-t → _edit binding"
+    # Comment edit removed from main menu; lives in issue-view (enter).
+    assert "alt-e:execute" not in block, "alt-e must not edit comments from the main browse menu"
+    assert "alt-e: edit comment" not in block
+    assert "enter: view comments" in block
+    assert "_edit {3} {2}" in block or "browse _edit {3} {2}" in block
+    # Focus stamps prefetch.want only (bg, no zh spawn) — drain is in stream_poll.
+    # Cold-starting zh on every focus kills mouse-wheel scroll.
+    assert "focus:bg-transform" in block and "prefetch.want" in block
+    assert "browse _issue-prefetch" not in block
+    # ctrl-o = browser; alt-o = console (full issue in less).
+    assert "ctrl-o:execute-silent" in block and "_open" in block
+    assert "alt-o:execute" in block and "_issue-full" in block
+    assert "ctrl-o: browser" in block
+    assert "alt-o: console" in block
+    # Issue view: load-once cache; start=cat header; resize=local retruncate.
+    view_start = zh.index("zh_browse_view()")
+    view_end = zh.index("\nzh_browse_open()", view_start)
+    view = zh[view_start:view_end]
+    assert "_comment-show" in view
+    assert "_comment-edit" in view
+    assert "_comment-lines" in view
+    assert "_comment " in view or "browse _comment " in view
+    assert "ctrl-n:execute" in view and "_comment" in view
+    assert "ctrl-n: new comment" in view
+    assert "_issue-full" in view
+    assert "_issue-load" in view
+    assert "ctrl-o:execute-silent" in view and "_open" in view
+    assert "alt-o:execute" in view and "_issue-full" in view
+    assert "ctrl-o: browser" in view
+    assert "alt-o: console" in view
+    assert "start:transform-header:cat" in view
+    assert "_issue-header-retruncate" in view
+    assert "start,resize:" not in view
+    assert "transform-header" in view
+    assert "ZH_ISSUE_NO_COMMENTS" in zh
+
+
+def test_browse_issue_load_writes_cache_parallel() -> None:
+    """zh_browse_issue_load writes header + comments cache; second call is TTL hit."""
+    import tempfile
+
+    stubs, fixture = _issue_view_stubs(body="load-me\nline-2")
+    comments = '[{"id":1,"user":"alice","created":"2026-07-01","body":"hello\\nworld"},{"id":2,"user":"bob","created":"2026-07-02","body":"second"}]'
+    # Count zh_fetch_issue_comments / cmd_issue network-ish calls.
+    stubs = (
+        stubs
+        + r"""
+zh_fetch_issue_comments() {
+    echo FETCH_COMMENTS >>"${ZH_BROWSE_DIR}/trace"
+    cat <<'EOF'
+[{"id":1,"user":"alice","created":"2026-07-01","body":"hello\nworld"},
+ {"id":2,"user":"bob","created":"2026-07-02","body":"second"}]
+EOF
+}
+"""
+    )
+    browse_dir = Path(tempfile.mkdtemp(prefix="zh-browse-load-"))
+    r = run_zh_with_stubs(
+        stubs,
+        f"""
+        export ZH_BROWSE_DIR={browse_dir}
+        export FZF_LINES=40
+        zh_browse_issue_load 42 acme/widgets
+        dir=$(zh_browse_issue_cache_dir 42 acme/widgets)
+        echo "READY:$(test -f \"$dir/ready\" && echo yes || echo no)"
+        echo "HDR_LINES:$(wc -l <\"$dir/header.txt\" | tr -d ' ')"
+        echo "TSV:$(wc -l <\"$dir/comments.tsv\" | tr -d ' ')"
+        head -n 1 "$dir/comments.tsv"
+        # Second load should not re-fetch (fresh TTL).
+        zh_browse_issue_load 42 acme/widgets
+        echo "FETCHES:$(grep -c FETCH_COMMENTS \"$ZH_BROWSE_DIR/trace\" || true)"
+        """,
+        extra_env={
+            "STUB_ISSUE_JSON": fixture,
+            "STUB_COMMENTS": comments,
+            "ZH_BROWSE_ISSUE_CACHE_TTL": "60",
+        },
+    )
+    assert r.returncode == 0, r.stderr
+    assert "READY:yes" in r.stdout
+    assert "TSV:2" in r.stdout
+    assert "1\t@alice · 2026-07-01\t" in r.stdout
+    assert "FETCHES:1" in r.stdout, r.stdout
+    assert "load-me" in (browse_dir / "issue-acme_widgets-42" / "header.full.txt").read_text()
+
+
+def test_browse_comment_show_reads_cache_not_network() -> None:
+    """_comment-show uses comments.json from issue cache (no second gh fetch)."""
+    import tempfile
+
+    browse_dir = Path(tempfile.mkdtemp(prefix="zh-browse-show-"))
+    issue_dir = browse_dir / "issue-acme_widgets-42"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "comments.json").write_text('[{"id":1,"user":"alice","created":"2026-07-01","body":"cached body"}]\n')
+    stubs = r"""
+zh_fetch_issue_comments() {
+    echo "SHOULD_NOT_FETCH" >&2
+    return 1
+}
+get_repo_info() { echo "acme/widgets"; }
+load_config() { :; }
+"""
+    r = run_zh_with_stubs(
+        stubs,
+        f"""
+        export ZH_BROWSE_DIR={browse_dir}
+        zh_browse_comment_show 42 acme/widgets 1
+        """,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "cached body" in r.stdout
+    assert "SHOULD_NOT_FETCH" not in r.stderr
+
+
+def test_browse_issue_header_retruncate_no_network() -> None:
+    """Resize path retruncates header.full.txt locally (no cmd_issue)."""
+    import tempfile
+
+    browse_dir = Path(tempfile.mkdtemp(prefix="zh-browse-retrunc-"))
+    issue_dir = browse_dir / "issue-acme_widgets-42"
+    issue_dir.mkdir(parents=True)
+    full = "\n".join(f"line-{i}" for i in range(1, 30))
+    (issue_dir / "header.full.txt").write_text(full + "\n")
+    stubs = r"""
+cmd_issue() {
+    echo "SHOULD_NOT_CALL_CMD_ISSUE" >&2
+    return 1
+}
+load_config() { :; }
+"""
+    r = run_zh_with_stubs(
+        stubs,
+        f"""
+        export ZH_BROWSE_DIR={browse_dir}
+        zh_browse_issue_header_retruncate 42 acme/widgets 8
+        wc -l <"$ZH_BROWSE_DIR/issue-acme_widgets-42/header.txt" | tr -d ' '
+        tail -n 1 "$ZH_BROWSE_DIR/issue-acme_widgets-42/header.txt"
+        """,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "SHOULD_NOT_CALL_CMD_ISSUE" not in r.stderr
+    lines = [ln for ln in (browse_dir / "issue-acme_widgets-42" / "header.txt").read_text().splitlines()]
+    assert len(lines) == 9
+    assert lines[-1].strip().startswith("…")
+
+
+def test_browse_issue_prefetch_skips_when_fresh() -> None:
+    """Prefetch is a no-op when cache is already fresh (no .loading race)."""
+    import tempfile
+
+    browse_dir = Path(tempfile.mkdtemp(prefix="zh-browse-pf-"))
+    issue_dir = browse_dir / "issue-acme_widgets-42"
+    issue_dir.mkdir(parents=True)
+    for name in ("ready", "header.txt", "header.full.txt", "comments.tsv", "comments.json"):
+        (issue_dir / name).write_text("x\n" if name != "comments.json" else "[]\n")
+    stubs = r"""
+zh_browse_issue_load() {
+    echo "LOAD_CALLED" >>"${ZH_BROWSE_DIR}/trace"
+}
+"""
+    r = run_zh_with_stubs(
+        stubs,
+        f"""
+        export ZH_BROWSE_DIR={browse_dir}
+        export ZH_BROWSE_ISSUE_CACHE_TTL=60
+        zh_browse_issue_prefetch 42 acme/widgets
+        sleep 0.2
+        echo "TRACE:$(test -f \"$ZH_BROWSE_DIR/trace\" && cat \"$ZH_BROWSE_DIR/trace\" || echo empty)"
+        """,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "TRACE:empty" in r.stdout
+
+
+def test_browse_id_cache_reuses_repo_and_workspace() -> None:
+    """Under ZH_BROWSE_DIR, get_repo_id / get_workspace_id hit disk after first fetch."""
+    import tempfile
+
+    browse_dir = Path(tempfile.mkdtemp(prefix="zh-browse-ids-"))
+    stubs = r"""
+resolve_gh_repo_id() { printf '999'; }
+zh_workspaces_fetch_all() {
+    echo FETCH_WS >>"${ZH_BROWSE_DIR}/trace"
+    printf '%s' '[{"id":"ws-gid","name":"TestWS"}]'
+}
+zh_graphql() {
+    echo FETCH_REPO >>"${ZH_BROWSE_DIR}/trace"
+    printf '%s' '{"data":{"repositoriesByGhId":[{"id":"repo-gid","ghId":999,"name":"widgets"}]}}'
+}
+"""
+    r = run_zh_with_stubs(
+        stubs,
+        f"""
+        export ZH_BROWSE_DIR={browse_dir}
+        unset ZH_WORKSPACE_NAME
+        echo "R1:$(get_repo_id acme/widgets)"
+        echo "R2:$(get_repo_id acme/widgets)"
+        echo "W1:$(get_workspace_id acme/widgets)"
+        echo "W2:$(get_workspace_id acme/widgets)"
+        echo "REPO_FETCHES:$(grep -c FETCH_REPO \"$ZH_BROWSE_DIR/trace\" || true)"
+        echo "WS_FETCHES:$(grep -c FETCH_WS \"$ZH_BROWSE_DIR/trace\" || true)"
+        """,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "R1:repo-gid" in r.stdout
+    assert "R2:repo-gid" in r.stdout
+    assert "W1:ws-gid" in r.stdout
+    assert "W2:ws-gid" in r.stdout
+    assert "REPO_FETCHES:1" in r.stdout, r.stdout
+    assert "WS_FETCHES:1" in r.stdout, r.stdout
+
+
+def test_browse_issue_header_max_lines_halves_screen() -> None:
+    """Header budget is ~half the terminal so the comment list stays usable."""
+    stubs = ""
+    r = run_zh_with_stubs(stubs, "zh_browse_issue_header_max_lines 40")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "40"
+
+    r = run_zh_with_stubs(stubs, "FZF_LINES=24 zh_browse_issue_header_max_lines")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "12"
+
+    r = run_zh_with_stubs(stubs, "FZF_LINES=8 zh_browse_issue_header_max_lines")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "6"  # floor
+
+
+def test_browse_issue_header_truncates_to_max() -> None:
+    """Header write caps lines and marks truncation when content overflows."""
+    import tempfile
+
+    # Build a long body so cmd_issue output exceeds the max.
+    long_body = "\n".join(f"line-{i}" for i in range(1, 30))
+    stubs, fixture = _issue_view_stubs(body=long_body)
+    out = Path(tempfile.mkdtemp()) / "hdr.txt"
+    r = run_zh_with_stubs(
+        stubs,
+        f"zh_browse_issue_header_write 42 acme/widgets {out} 8",
+        extra_env={"STUB_ISSUE_JSON": fixture, "STUB_COMMENTS": "[]"},
+    )
+    assert r.returncode == 0, r.stderr
+    lines = out.read_text().splitlines()
+    assert len(lines) == 9  # 8 content + truncation marker
+    assert lines[-1].strip().startswith("…")
+    assert "Comments" not in out.read_text()
+
+
+def test_browse_comment_lines_one_liners() -> None:
+    """Issue-view comment rows are idx · @user · date · single-line preview."""
+    stubs = r"""
+zh_fetch_issue_comments() {
+    cat <<'EOF'
+[{"id":1,"user":"alice","created":"2026-07-01","body":"hello\nworld\twith tab"},
+ {"id":2,"user":"bob","created":"2026-07-02","body":"second"}]
+EOF
+}
+get_repo_info() { echo "acme/widgets"; }
+load_config() { :; }
+"""
+    r = run_zh_with_stubs(
+        stubs,
+        "zh_browse_comment_lines 42 acme/widgets",
+    )
+    assert r.returncode == 0, r.stderr
+    lines = [ln for ln in r.stdout.splitlines() if ln.strip()]
+    assert len(lines) == 2
+    assert lines[0].startswith("1\t@alice · 2026-07-01\t")
+    assert "hello world with tab" in lines[0]
+    assert "\n" not in lines[0]
+    assert lines[1].startswith("2\t@bob · 2026-07-02\tsecond")
+
+
+def test_issue_no_comments_env_skips_comment_section() -> None:
+    """ZH_ISSUE_NO_COMMENTS=1 prints metadata/description only (browse header)."""
+    stubs, fixture = _issue_view_stubs(body="keep me")
+    comments = '[{"author":{"login":"alice"},"createdAt":"2026-07-01T00:00:00Z","body":"should not appear"}]'
+    r = run_zh_with_stubs(
+        stubs,
+        "ZH_ISSUE_NO_COMMENTS=1 cmd_issue 42",
+        extra_env={
+            "STUB_ISSUE_JSON": fixture,
+            "STUB_COMMENTS": comments,
+        },
+    )
+    assert r.returncode == 0, r.stderr
+    assert "keep me" in r.stdout
+    assert "Comments" not in r.stdout
+    assert "should not appear" not in r.stdout
+
+
+def test_browse_fzf_uses_track_and_shared_pick() -> None:
+    """Browse keeps selection across reload; nested pickers share defaults."""
+    zh = (Path(__file__).resolve().parent.parent / "lib" / "browse.sh").read_text()
+    assert "zh_fzf_pick()" in zh
+    assert "zh_browse_clip()" in zh
+    assert "--select-1" in zh
+    assert "enter:accept-non-empty" in zh
+    start = zh.index("zh_browse_ui()")
+    end = zh.index("\nzh_browse_reload_from_prompt", start)
+    block = zh[start:end]
+    assert "--track" in block
+    assert "--id-nth=2,3" in block
+    assert "--highlight-line" in block
+    assert "browse _clip" in block
+    # Copy stays in-session (no +abort after clipboard).
+    assert "pbcopy)+abort" not in block
+    # All-view stream: bg poll + cheap cat reload (not GraphQL-in-reload).
+    assert "every(0.3):bg-transform" in block and "_stream-poll" in block
+    assert "_stream-on-load" not in block
+    # Nested pickers go through the shared helper.
+    assert "zh_fzf_pick" in zh[zh.index("zh_browse_move()") : zh.index("zh_browse_comment()")]
+
+
+def test_browse_all_stream_reload_is_cheap_cat() -> None:
+    """alt-a must not put GraphQL inside fzf reload (blocks --track UI).
+
+    With --track, fzf freezes cursor movement until the tracked row
+    appears in the reload stream. Network-in-reload therefore freezes
+    navigation for the whole page fetch. Worker appends; fzf tails.
+    """
+    zh = (Path(__file__).resolve().parent.parent / "lib" / "browse.sh").read_text()
+    assert "zh_browse_stream_start_worker()" in zh
+    assert "zh_browse_stream_tick_write()" in zh
+    assert "zh_browse_stream_cat()" in zh
+    assert "zh_browse_stream_tail()" in zh
+    assert "zh_browse_stream_poll()" in zh
+    start = zh.index("zh_browse_reload_actions()")
+    end = zh.index("\nzh_browse_list_src_safe()", start)
+    block = zh[start:end]
+    assert "_stream-tail" in block
+    assert "zh_browse_stream_start_worker" in block
+    # Must not chain load→_stream-tick GraphQL through reload anymore.
+    assert "reload(%q browse _stream-tick)" not in block
+    assert "_stream-tick)" not in block
+
+
+def test_browse_stream_poll_footer_only_while_streaming() -> None:
+    """While streaming, poll updates footer only — no mid-stream reload()."""
+    import tempfile
+
+    browse_dir = Path(tempfile.mkdtemp(prefix="zh-browse-poll-"))
+    (browse_dir / "mode").write_text("streaming\n")
+    (browse_dir / "progress").write_text("TO DO\t1\t4\n")
+    (browse_dir / "accum.tsv").write_text("TO DO\tacme/widgets\t1\t—\t—\ttitle\thttps://x\n")
+    stubs = r"""
+zh_browse_bin() { printf '/usr/bin/zh\n'; }
+zh_browse_prefetch_drain() { :; }
+"""
+    r = run_zh_with_stubs(
+        stubs,
+        f"""
+        export ZH_BROWSE_DIR={browse_dir}
+        echo 'FIRST:'
+        zh_browse_stream_poll
+        echo 'SECOND:'
+        zh_browse_stream_poll
+        """,
+    )
+    assert r.returncode == 0, r.stderr
+    first, second = r.stdout.split("SECOND:", 1)
+    assert "change-footer" in first
+    assert "loading TO DO" in first
+    assert "reload" not in first
+    # Second poll: same footer → silent
+    assert "change-footer" not in second
+    assert "reload" not in second
+
+
+def test_browse_stream_poll_reloads_only_on_gen_advance() -> None:
+    """Compat name kept: done mode does one final sorted cat reload."""
+    import tempfile
+
+    browse_dir = Path(tempfile.mkdtemp(prefix="zh-browse-poll-done-"))
+    (browse_dir / "mode").write_text("done\n")
+    (browse_dir / "pipelines.json").write_text('[{"id":"p1","name":"TO DO"}]')
+    (browse_dir / "accum.tsv").write_text("TO DO\tacme/widgets\t2\t—\t—\tb\tu\nTO DO\tacme/widgets\t1\t—\t—\ta\tu\n")
+    stubs = r"""
+zh_browse_bin() { printf '/usr/bin/zh\n'; }
+zh_browse_prefetch_drain() { :; }
+zh_browse_stream_stop_worker() { :; }
+"""
+    r = run_zh_with_stubs(
+        stubs,
+        f"""
+        export ZH_BROWSE_DIR={browse_dir}
+        zh_browse_stream_poll
+        """,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "_stream-cat" in r.stdout
+    assert "reload" in r.stdout
+    # Views footer is restored on load (_on-load), not chained here.
+    assert "sorting" in r.stdout
+    # Finalized sort: #1 before #2
+    lines = (browse_dir / "accum.tsv").read_text().splitlines()
+    assert lines[0].split("\t")[2] == "1"
+    assert lines[1].split("\t")[2] == "2"
+
+
+def test_browse_on_load_restores_views_footer() -> None:
+    """After sprint/mine reload, load event must clear 'loading …' footer."""
+    import tempfile
+
+    browse_dir = Path(tempfile.mkdtemp(prefix="zh-browse-onload-"))
+    (browse_dir / "mode").write_text("idle\n")
+    (browse_dir / "loading_view").write_text("mine\n")
+    r = run_zh_with_stubs(
+        "",
+        f"""
+        export ZH_BROWSE_DIR={browse_dir}
+        zh_browse_on_load
+        """,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "change-footer-label| views |" in r.stdout
+    assert "alt-s: sprint" in r.stdout
+    assert "loading" not in r.stdout
+    assert not (browse_dir / "loading_view").exists()
+
+
+def test_browse_poll_clears_loading_for_mine_and_sprint() -> None:
+    """Poll restores views footer when list reload stamps reload_done (mine/sprint)."""
+    import tempfile
+
+    browse_dir = Path(tempfile.mkdtemp(prefix="zh-browse-poll-mine-"))
+    (browse_dir / "mode").write_text("idle\n")
+    (browse_dir / "loading_view").write_text("mine\n")
+    (browse_dir / "reload_done").write_text("1\n")
+    stubs = r"""
+zh_browse_bin() { printf '/usr/bin/zh\n'; }
+zh_browse_prefetch_drain() { :; }
+"""
+    r = run_zh_with_stubs(
+        stubs,
+        f"""
+        export ZH_BROWSE_DIR={browse_dir}
+        zh_browse_stream_poll
+        """,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "change-footer-label| views |" in r.stdout
+    assert "alt-m: mine" in r.stdout
+    assert not (browse_dir / "loading_view").exists()
+    assert not (browse_dir / "reload_done").exists()
+
+
+def test_browse_list_src_safe_marks_reload_done() -> None:
+    """_list-src-safe must stamp reload_done so mine/sprint footers clear."""
+    import tempfile
+
+    browse_dir = Path(tempfile.mkdtemp(prefix="zh-browse-mark-"))
+    (browse_dir / "mode").write_text("idle\n")
+    stubs = r"""
+zh_browse_list_src() { printf 'TO DO\tacme/w\t1\t—\t—\tt\tu\n'; }
+"""
+    r = run_zh_with_stubs(
+        stubs,
+        f"""
+        export ZH_BROWSE_DIR={browse_dir}
+        zh_browse_list_src_safe mine >/dev/null
+        test -f "$ZH_BROWSE_DIR/reload_done" && echo MARKED
+        """,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "MARKED" in r.stdout
+
+
+def test_browse_reload_actions_defers_footer_to_load() -> None:
+    """Sprint reload must not chain views footer after async reload (sticks)."""
+    zh = (Path(__file__).resolve().parent.parent / "lib" / "browse.sh").read_text()
+    start = zh.index("zh_browse_reload_actions()")
+    end = zh.index("\nzh_browse_list_src_safe()", start)
+    block = zh[start:end]
+    assert "loading %s" in block or "loading %s…" in block or "loading %s" in block
+    # The buggy pattern: restore footer in the same action string as reload.
+    assert "+change-footer-label[ views ]+change-footer[" not in block
+    assert "zh_browse_on_load" in zh
+    ui = zh[zh.index("zh_browse_ui()") : zh.index("\nzh_browse_reload_from_prompt")]
+    assert "load:bg-transform" in ui and "_on-load" in ui
+
+
+def test_browse_stream_cat_no_network() -> None:
+    """_stream-cat only reads accum.tsv (reload path must stay instant)."""
+    import tempfile
+
+    browse_dir = Path(tempfile.mkdtemp(prefix="zh-browse-cat-"))
+    (browse_dir / "accum.tsv").write_text("P\tacme/w\t9\t1\ta\thello\tu\n")
+    stubs = r"""
+zh_browse_pipeline_page() {
+    echo "SHOULD_NOT_FETCH" >&2
+    return 1
+}
+zh_graphql() {
+    echo "SHOULD_NOT_GRAPHQL" >&2
+    return 1
+}
+"""
+    r = run_zh_with_stubs(
+        stubs,
+        f"""
+        export ZH_BROWSE_DIR={browse_dir}
+        zh_browse_stream_cat
+        """,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "hello" in r.stdout
+    assert "SHOULD_NOT_FETCH" not in r.stderr
+    assert "SHOULD_NOT_GRAPHQL" not in r.stderr
+
+
+def test_browse_soft_outcome_detects_cancels() -> None:
+    """Cancels/noops must not trigger Press Enter pauses."""
+    stubs = ""
+    r = run_zh_with_stubs(
+        stubs,
+        r"""
+        zh_browse_soft_outcome "empty comment — cancelled" && echo SOFT1
+        zh_browse_soft_outcome "error: no comments on #989" && echo SOFT2
+        zh_browse_soft_outcome "info: unchanged — skipped" && echo SOFT3
+        zh_browse_soft_outcome "error: failed to move issue" || echo HARD
+        line=$(zh_browse_status_line $'info: updating...\n✓ Updated #42: Title')
+        echo "LINE:$line"
+        """,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "SOFT1" in r.stdout
+    assert "SOFT2" in r.stdout
+    assert "SOFT3" in r.stdout
+    assert "HARD" in r.stdout
+    assert "LINE:✓ updated #42: title" in r.stdout
+
+
+def test_browse_sprint_tsv_filters_closed_and_prefers_scoped_pipeline() -> None:
+    """CLOSED sprint issues must not appear in browse; pipeline uses
+    workspace-scoped pipelineIssue over stale pipelineIssues.nodes[0].
+
+    Reproduces #999: GitHub CLOSED + Done (in Preprod), but unscoped
+    pipelineIssues.nodes[0] still said New Issues — browse listed it.
+    """
+    stubs = r"""
+        load_config() { :; }
+        get_repo_info() { printf 'acme/widgets'; }
+        get_workspace_id() { printf 'ws-gid'; }
+        zh_resolve_sprint_id() { printf 'sprint-gid\tSprint 1'; }
+        zh_pipeline_names_ordered() { printf '%s' '["New Issues","In Progress","Done (in Preprod)"]'; }
+        zh_sprint_issues_fetch_all() {
+            # Assert workspace id is forwarded as $4
+            echo "FETCH_WS:${4:-}" >&2
+            printf '%s' "$STUB_WALKED"
+        }
+    """
+    walked = json.dumps(
+        {
+            "nodes": [
+                {
+                    "issue": {
+                        "number": 999,
+                        "title": "already closed",
+                        "state": "CLOSED",
+                        "htmlUrl": "https://github.com/acme/widgets/issues/999",
+                        "estimate": None,
+                        "assignees": {"nodes": [{"login": "alice"}]},
+                        "repository": {"ownerName": "acme", "name": "widgets"},
+                        "pipelineIssue": {"pipeline": {"name": "Done (in Preprod)"}},
+                        "pipelineIssues": {"nodes": [{"pipeline": {"name": "New Issues"}}]},
+                    }
+                },
+                {
+                    "issue": {
+                        "number": 42,
+                        "title": "still open",
+                        "state": "OPEN",
+                        "htmlUrl": "https://github.com/acme/widgets/issues/42",
+                        "estimate": {"value": 3},
+                        "assignees": {"nodes": []},
+                        "repository": {"ownerName": "acme", "name": "widgets"},
+                        "pipelineIssue": {"pipeline": {"name": "In Progress"}},
+                        "pipelineIssues": {"nodes": [{"pipeline": {"name": "New Issues"}}]},
+                    }
+                },
+            ]
+        }
+    )
+    r = run_zh_with_stubs(
+        stubs,
+        "zh_browse_list_sprint_tsv",
+        extra_env={"STUB_WALKED": walked},
+    )
+    assert r.returncode == 0, f"stderr={r.stderr!r} stdout={r.stdout!r}"
+    assert "FETCH_WS:ws-gid" in r.stderr
+    lines = [ln for ln in r.stdout.splitlines() if ln.strip()]
+    # TSV: pipeline, repo, number, …
+    nums = [ln.split("\t")[2] for ln in lines]
+    assert "999" not in nums, f"CLOSED #999 must be filtered from browse sprint TSV; got {lines!r}"
+    assert nums == ["42"]
+    assert lines[0].split("\t")[0] == "In Progress", f"open issue must use workspace-scoped pipeline, not nodes[0]; got {lines[0]!r}"
+
+
+def _fake_bkt_on_path(payload: str = '{"data":{"ok":true}}') -> tuple[str, str]:
+    """Install a PATH-first `bkt` binary stub; return (bindir, payload unused).
+
+    Production uses `env ZH_TOKEN=… bkt …`, which runs an executable — not a
+    shell function — so function stubs never intercept. Callers must
+    `export PATH="$bindir:$PATH"` in stubs (harness prepends the parent PATH,
+    which may already contain a real bkt).
+    """
+    import tempfile
+
+    bindir = tempfile.mkdtemp(prefix="zh-fake-bkt-")
+    bkt_path = Path(bindir) / "bkt"
+    # Log argv + token length; emit JSON (do not exec the wrapped command —
+    # that would need a PATH curl binary too).
+    bkt_path.write_text(f"#!/bin/sh\necho \"BKT_ARGV:$*\" >&2\necho \"BKT_TOKEN_LEN:${{#ZH_TOKEN}}\" >&2\nprintf '%s' '{payload}'\n")
+    bkt_path.chmod(0o755)
+    return bindir, payload
+
+
+def test_zh_graphql_query_uses_bkt_when_available() -> None:
+    """Read queries wrap curl in bkt; unexported ZH_TOKEN still reaches it."""
+    bindir, _ = _fake_bkt_on_path('{"data":{"ok":true}}')
+    stubs = f"""
+        export PATH="{bindir}:$PATH"
+        curl() {{
+            echo "CURL_REACHED" >&2
+            printf '%s' '{{"data":{{"ok":true}}}}'
+        }}
+    """
+    r = run_zh_with_stubs(
+        stubs,
+        # Unset harness-exported ZH_TOKEN, then set a shell-only value.
+        # Production must pass it via `env ZH_TOKEN=…` into bkt.
+        'unset ZH_TOKEN; ZH_TOKEN="secret-tok"; zh_graphql "query { viewer { id } }" "{}"',
+        extra_env={"ZH_BKT": "1", "ZH_TOKEN": ""},
+    )
+    assert r.returncode == 0, f"stderr={r.stderr!r} stdout={r.stdout!r}"
+    assert "BKT_ARGV:" in r.stderr
+    assert "--scope zh-graphql" in r.stderr
+    assert "--discard-failures" in r.stderr
+    assert "BKT_TOKEN_LEN:10" in r.stderr, f"unexported ZH_TOKEN must be passed into bkt via env; got stderr={r.stderr!r}"
+    assert "CURL_REACHED" not in r.stderr  # curl runs under bkt, not bare
+
+
+def test_zh_graphql_mutation_skips_bkt() -> None:
+    """Mutations must hit curl directly — never cache writes."""
+    bindir, _ = _fake_bkt_on_path('{"data":{}}')
+    stubs = f"""
+        export PATH="{bindir}:$PATH"
+        curl() {{
+            echo "CURL_DIRECT" >&2
+            printf '%s' '{{"data":{{"createIssue":{{"issue":{{"number":1}}}}}}}}'
+        }}
+    """
+    r = run_zh_with_stubs(
+        stubs,
+        'zh_graphql "mutation { createIssue(input: {}) { issue { number } } }" "{}"',
+        extra_env={"ZH_TOKEN": "tok", "ZH_BKT": "1"},
+    )
+    assert r.returncode == 0, f"stderr={r.stderr!r}"
+    assert "BKT_ARGV:" not in r.stderr
+    assert "CURL_DIRECT" in r.stderr
+
+
+def test_zh_graphql_bkt_force_flag() -> None:
+    """ZH_BKT_FORCE=1 (and browse bkt-force file) pass --force to bkt."""
+    bindir, _ = _fake_bkt_on_path('{"data":{}}')
+    stubs = f'export PATH="{bindir}:$PATH"'
+    r = run_zh_with_stubs(
+        stubs,
+        'zh_graphql "query { x }" "{}"',
+        extra_env={"ZH_TOKEN": "tok", "ZH_BKT": "1", "ZH_BKT_FORCE": "1"},
+    )
+    assert r.returncode == 0, f"stderr={r.stderr!r}"
+    assert "--force" in r.stderr
+
+
+def test_zh_graphql_bkt_disabled() -> None:
+    """ZH_BKT=0 disables caching even when bkt is installed."""
+    bindir, _ = _fake_bkt_on_path('{"data":{}}')
+    stubs = f"""
+        export PATH="{bindir}:$PATH"
+        curl() {{
+            echo "CURL_DIRECT" >&2
+            printf '%s' '{{"data":{{}}}}'
+        }}
+    """
+    r = run_zh_with_stubs(
+        stubs,
+        'zh_graphql "query { x }" "{}"',
+        extra_env={"ZH_TOKEN": "tok", "ZH_BKT": "0"},
+    )
+    assert r.returncode == 0
+    assert "BKT_ARGV:" not in r.stderr
+    assert "CURL_DIRECT" in r.stderr
+
+
+def test_browse_ctrl_r_stamps_bkt_force_flag() -> None:
+    """ctrl-r reload path must stamp ZH_BROWSE_DIR/bkt-force."""
+    zh = (Path(__file__).resolve().parent.parent / "lib" / "browse.sh").read_text()
+    assert "bkt-force" in zh
+    assert 'zh_browse_reload_actions "$view" force' in zh or 'zh_browse_reload_actions "$view" force' in zh.replace("'", '"')
+    # Soft check: force function mentions busting cache
+    start = zh.index("zh_browse_reload_force_from_prompt()")
+    end = zh.index("\ncmd_browse()", start)
+    block = zh[start:end]
+    assert "force" in block
+    assert "no-op" not in block
+
+
+def test_cmd_close_reason_completed_forwards_to_gh() -> None:
+    """zh close -r completed passes --reason completed to gh."""
+    stubs = r"""
+        load_config() { :; }
+        get_repo_info() { printf 'acme/widgets'; }
+        gh() {
+            # issue view title lookup
+            if [[ "$1" == "issue" && "$2" == "view" ]]; then
+                printf '%s' 'Some title'
+                return 0
+            fi
+            # issue close — production redirects gh stderr to /dev/null,
+            # so log argv to a file the test can read via stdout print.
+            if [[ "$1" == "issue" && "$2" == "close" ]]; then
+                printf '%s\n' "$*" >"${ZH_TEST_GH_LOG:?}"
+                return 0
+            fi
+            return 0
+        }
+    """
+    import tempfile
+
+    log = tempfile.NamedTemporaryFile(delete=False)
+    log.close()
+    try:
+        r = run_zh_with_stubs(
+            stubs,
+            'cmd_close "$@"; echo "LOG:$(cat "$ZH_TEST_GH_LOG")"',
+            args=["42", "--reason", "completed", "--comment", "done"],
+            extra_env={"ZH_TEST_GH_LOG": log.name},
+        )
+        assert r.returncode == 0, f"stderr={r.stderr!r} stdout={r.stdout!r}"
+        assert "Reason:  completed" in r.stdout
+        assert "Comment: done" in r.stdout
+        assert "--reason completed" in r.stdout
+        assert "--comment done" in r.stdout
+    finally:
+        Path(log.name).unlink(missing_ok=True)
+
+
+def test_cmd_close_duplicate_requires_duplicate_of() -> None:
+    """Reason duplicate without --duplicate-of is a hard error."""
+    stubs = r"""
+        load_config() { :; }
+        get_repo_info() { printf 'acme/widgets'; }
+        gh() { printf 't'; return 0; }
+    """
+    r = run_zh_with_stubs(
+        stubs,
+        'cmd_close "$@"',
+        args=["42", "--reason", "duplicate"],
+    )
+    assert r.returncode != 0
+    assert "duplicate-of" in r.stderr.lower()
+
+
+def test_cmd_close_not_planned_normalizes() -> None:
+    """Aliases like wontfix normalize to gh's 'not planned'."""
+    stubs = r"""
+        load_config() { :; }
+        get_repo_info() { printf 'acme/widgets'; }
+        gh() {
+            if [[ "$1" == "issue" && "$2" == "view" ]]; then
+                printf '%s' 't'; return 0
+            fi
+            if [[ "$1" == "issue" && "$2" == "close" ]]; then
+                printf '%s\n' "$*" >"${ZH_TEST_GH_LOG:?}"
+                return 0
+            fi
+            return 0
+        }
+    """
+    import tempfile
+
+    log = tempfile.NamedTemporaryFile(delete=False)
+    log.close()
+    try:
+        r = run_zh_with_stubs(
+            stubs,
+            'cmd_close "$@"; echo "LOG:$(cat "$ZH_TEST_GH_LOG")"',
+            args=["7", "-r", "wontfix"],
+            extra_env={"ZH_TEST_GH_LOG": log.name},
+        )
+        assert r.returncode == 0, f"stderr={r.stderr!r} stdout={r.stdout!r}"
+        assert "Reason:  not planned" in r.stdout
+        assert "--reason not planned" in r.stdout
+    finally:
+        Path(log.name).unlink(missing_ok=True)
+
+
+def test_parse_title_body_file_git_commit_style() -> None:
+    """title\\n\\nbody → title + body; blank separator dropped."""
+    stubs = ""
+    r = run_zh_with_stubs(
+        stubs,
+        r"""
+        f=$(mktemp)
+        printf 'My Title\n\nLine one\nLine two\n' >"$f"
+        zh_parse_title_body_file "$f"
+        echo "TITLE:$ZH_EDIT_TITLE"
+        echo "BODY:$ZH_EDIT_BODY"
+        rm -f "$f"
+        """,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "TITLE:My Title" in r.stdout
+    assert "BODY:Line one\nLine two" in r.stdout
+
+
+def test_parse_title_body_file_no_blank_separator() -> None:
+    """title\\nbody without blank line keeps body from line 2."""
+    stubs = ""
+    r = run_zh_with_stubs(
+        stubs,
+        r"""
+        f=$(mktemp)
+        printf 'Title Only\nBody starts immediately\n' >"$f"
+        zh_parse_title_body_file "$f"
+        echo "TITLE:$ZH_EDIT_TITLE"
+        echo "BODY:$ZH_EDIT_BODY"
+        rm -f "$f"
+        """,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "TITLE:Title Only" in r.stdout
+    assert "BODY:Body starts immediately" in r.stdout
+
+
+def test_parse_title_body_file_rejects_empty_title() -> None:
+    stubs = ""
+    r = run_zh_with_stubs(
+        stubs,
+        r"""
+        f=$(mktemp)
+        printf '\n\nbody only\n' >"$f"
+        if zh_parse_title_body_file "$f"; then
+            echo PARSE_OK
+        else
+            echo PARSE_FAIL
+        fi
+        rm -f "$f"
+        """,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "PARSE_FAIL" in r.stdout
+
+
+def test_comment_edit_subcommand_routes() -> None:
+    """zh comment edit <issue> [N] must not treat 'edit' as comment body."""
+    stubs = r"""
+        get_repo_info() { echo "acme/widgets"; }
+        zh_gh_login() { echo bob; }
+        zh_fetch_issue_comments() {
+            echo '[{"id":101,"user":"bob","created":"2026-05-12","body":"old text"}]'
+        }
+        zh_editor_file() {
+            # Seed path is $1; write updated body and print a new tmp path.
+            local out
+            out=$(mktemp)
+            printf 'updated text' >"$out"
+            printf '%s\n' "$out"
+            return 0
+        }
+        gh() {
+            # Accept any gh api PATCH (stdin body via --input -).
+            if [[ "$1" == "api" ]]; then
+                cat >/dev/null || true
+                echo '{"id":101,"body":"updated text"}'
+                return 0
+            fi
+            echo "unexpected gh: $*" >&2
+            return 1
+        }
+    """
+    r = run_zh_with_stubs(stubs, "cmd_comment edit 42 1")
+    assert r.returncode == 0, f"stderr={r.stderr!r} stdout={r.stdout!r}"
+    assert "updated comment 1 on #42" in r.stdout
+
+
+def test_comment_edit_single_own_comment_skips_picker() -> None:
+    """One own comment → edit it directly (no fzf), even if others exist."""
+    stubs = r"""
+        get_repo_info() { echo "acme/widgets"; }
+        zh_gh_login() { echo bob; }
+        zh_fetch_issue_comments() {
+            echo '[{"id":99,"user":"alice","created":"2026-05-11","body":"theirs"},
+                   {"id":101,"user":"bob","created":"2026-05-12","body":"mine"}]'
+        }
+        zh_editor_file() {
+            local out; out=$(mktemp)
+            printf 'edited' >"$out"
+            printf '%s\n' "$out"
+            return 0
+        }
+        fzf() { echo "FZF_SHOULD_NOT_RUN" >&2; return 1; }
+        command() {
+            if [[ "$1" == "-v" && "$2" == "fzf" ]]; then
+                return 0
+            fi
+            builtin command "$@"
+        }
+        gh() {
+            if [[ "$1" == "api" ]]; then
+                cat >/dev/null || true
+                echo '{"id":101}'
+                return 0
+            fi
+            return 1
+        }
+    """
+    r = run_zh_with_stubs(stubs, "cmd_comment edit 42")
+    assert r.returncode == 0, f"stderr={r.stderr!r} stdout={r.stdout!r}"
+    assert "FZF_SHOULD_NOT_RUN" not in r.stderr
+    assert "updated comment 2 on #42" in r.stdout
+
+
+def test_comment_edit_rejects_others_comment() -> None:
+    """Explicit index for someone else's comment fails clearly."""
+    stubs = r"""
+        get_repo_info() { echo "acme/widgets"; }
+        zh_gh_login() { echo bob; }
+        zh_fetch_issue_comments() {
+            echo '[{"id":99,"user":"alice","created":"2026-05-11","body":"theirs"},
+                   {"id":101,"user":"bob","created":"2026-05-12","body":"mine"}]'
+        }
+    """
+    r = run_zh_with_stubs(stubs, "cmd_comment edit 42 1")
+    assert r.returncode != 0
+    assert "alice" in r.stderr
+    assert "your own" in r.stderr.lower() or "only allows" in r.stderr.lower()
+
+
+def test_comment_edit_no_own_comments_soft() -> None:
+    """No comments by the viewer → soft info, exit 0."""
+    stubs = r"""
+        get_repo_info() { echo "acme/widgets"; }
+        zh_gh_login() { echo bob; }
+        zh_fetch_issue_comments() {
+            echo '[{"id":99,"user":"alice","created":"2026-05-11","body":"theirs"}]'
+        }
+    """
+    r = run_zh_with_stubs(stubs, "cmd_comment edit 42")
+    assert r.returncode == 0, f"stderr={r.stderr!r} stdout={r.stdout!r}"
+    assert "no editable comments" in r.stdout.lower() or "no editable comments" in r.stderr.lower()
+
+
+def test_comment_edit_fzf_reads_candidates_not_tty() -> None:
+    """Regression: fzf must consume the jq pipe, not </dev/tty (files)."""
+    zh = (Path(__file__).resolve().parent.parent / "lib" / "issues.sh").read_text()
+    start = zh.index("cmd_comment_edit()")
+    end = zh.index("\ncmd_comment()", start)
+    block = zh[start:end]
+    # Isolate the fzf invocation (pipe into zh_fzf_pick / fzf …).
+    assert "zh_fzf_pick" in block
+    fzf_start = block.index("zh_fzf_pick")
+    fzf_chunk = block[fzf_start : fzf_start + 400]
+    assert "</dev/tty" not in fzf_chunk, f"fzf stdin must be the candidate pipe, not /dev/tty (chunk={fzf_chunk!r})"
+
+
+def test_comment_without_body_non_tty_errors() -> None:
+    """Bare zh comment <issue> with no TTY must not hang; clear error."""
+    stubs = r"""
+        get_repo_info() { echo "acme/widgets"; }
+        zh_editor_file() { return 1; }
+    """
+    r = run_zh_with_stubs(stubs, "cmd_comment 42")
+    assert r.returncode != 0
+    assert "comment body is required" in r.stderr.lower() or "editor" in r.stderr.lower()
+
+
+def test_edit_noninteractive_calls_update() -> None:
+    """zh edit -t/-d reuses updateIssue without opening an editor."""
+    stubs = r"""
+        get_repo_info() { echo "acme/widgets"; }
+        get_repo_id() { echo "repo-1"; }
+        zh_graphql() {
+            local q="$1"
+            if [[ "$q" == *issueByInfo* ]]; then
+                echo '{"data":{"issueByInfo":{"title":"Old","body":"Old body"}}}'
+                return 0
+            fi
+            if [[ "$q" == *updateIssue* ]]; then
+                echo '{"data":{"updateIssue":{"issue":{"number":42,"title":"New Title"}}}}'
+                return 0
+            fi
+            echo "unexpected query: $q" >&2
+            return 1
+        }
+        zh_resolve_issue_id() { echo "issue-id-42"; }
+        zh_editor_file() { echo "EDITOR_SHOULD_NOT_RUN" >&2; return 1; }
+    """
+    r = run_zh_with_stubs(
+        stubs,
+        'cmd_edit 42 -t "New Title" -d "New body"',
+    )
+    assert r.returncode == 0, f"stderr={r.stderr!r} stdout={r.stdout!r}"
+    assert "Updated #42: New Title" in r.stdout
+    assert "EDITOR_SHOULD_NOT_RUN" not in r.stderr

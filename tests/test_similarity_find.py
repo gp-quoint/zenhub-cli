@@ -12,14 +12,12 @@ from __future__ import annotations
 
 import pytest
 
-# These tests construct fake embedding vectors, so they genuinely need
-# numpy. CI installs it (see .github/workflows/ci.yml), but skip the
-# whole module gracefully rather than erroring collection if it's
-# absent in some minimal environment.
+# These tests construct fake embedding vectors, so they genuinely need numpy. CI installs it (see .github/workflows/ci.yml), but skip the whole
+# module gracefully rather than erroring collection if it's absent in some minimal environment.
 np = pytest.importorskip("numpy")
 
-import similarity
-from similarity import IssueEntry, Match, find_similar
+from zh import similarity
+from zh.similarity import IssueEntry, Match, find_similar
 
 
 def _entry(number: int, vec, *, title: str = "", state: str = "open") -> IssueEntry:
@@ -38,12 +36,8 @@ def _entry(number: int, vec, *, title: str = "", state: str = "open") -> IssueEn
 
 @pytest.fixture
 def fake_repo(monkeypatch):
-    # Query vector [1, 0]. Entry similarities to it (after normalize):
-    #   A: [1, 0]            → 1.00
-    #   B: [0.8, 0.6]        → 0.80
-    #   C: [0.45, 0.893]     → 0.45  (just under the old 0.5, above 0.35)
-    #   D: [0.3, 0.954]      → 0.30  (below 0.35)
-    #   E: [0.1, 0.995]      → 0.10  (well below)
+    # Query vector [1, 0]. Entry similarities to it (after normalize): A: [1, 0]            → 1.00 B: [0.8, 0.6]        → 0.80 C: [0.45, 0.893]     → 0.45  (just under
+    # the old 0.5, above 0.35) D: [0.3, 0.954]      → 0.30  (below 0.35) E: [0.1, 0.995]      → 0.10  (well below)
     entries = {
         "A": _entry(1, [1.0, 0.0], title="exact"),
         "B": _entry(2, [0.8, 0.6], title="strong"),
@@ -52,7 +46,8 @@ def fake_repo(monkeypatch):
         "E": _entry(5, [0.10, np.sqrt(1 - 0.10**2)], title="faint"),
     }
     monkeypatch.setattr(
-        similarity, "_load_cache",
+        similarity,
+        "_load_cache",
         lambda repo: {"version": 1, "indexed_at": "x", "entries": entries},
     )
     monkeypatch.setattr(similarity, "_auto_sync", lambda repo: {"ok": True})
@@ -61,9 +56,8 @@ def fake_repo(monkeypatch):
 
 
 def test_find_similar_default_threshold_is_0_35(fake_repo):
-    # Default threshold 0.35 → A(1.0), B(0.8), C(0.45) clear it; D(0.30)
-    # and E(0.10) don't. With min_results=0 (default), only the three
-    # above-threshold come back.
+    # Default threshold 0.35 → A(1.0), B(0.8), C(0.45) clear it; D(0.30) and E(0.10) don't. With min_results=0
+    # (default), only the three above-threshold come back.
     results = find_similar("q", "acme/widgets")
     nums = [m.number for m in results]
     assert nums == [1, 2, 3]
@@ -87,11 +81,14 @@ def test_find_similar_backfill_capped_at_top_k(fake_repo):
 
 
 def test_find_similar_high_threshold_with_backfill_returns_closest(fake_repo):
-    # The exact zh_similar scenario that started this: nothing clears a
-    # high threshold, but min_results surfaces the closest anyway —
-    # never a bare empty list.
+    # The exact zh_similar scenario that started this: nothing clears a high threshold, but min_results
+    # surfaces the closest anyway — never a bare empty list.
     results = find_similar(
-        "q", "acme/widgets", top_k=3, threshold=0.95, min_results=3,
+        "q",
+        "acme/widgets",
+        top_k=3,
+        threshold=0.95,
+        min_results=3,
     )
     nums = [m.number for m in results]
     assert nums == [1, 2, 3]  # closest three
@@ -110,7 +107,8 @@ def test_find_similar_min_results_zero_preserves_strict_behavior(fake_repo):
 
 def test_find_similar_empty_cache_returns_empty(monkeypatch):
     monkeypatch.setattr(
-        similarity, "_load_cache",
+        similarity,
+        "_load_cache",
         lambda repo: {"version": 1, "indexed_at": None, "entries": {}},
     )
     monkeypatch.setattr(similarity, "_auto_sync", lambda repo: {"ok": True})
@@ -119,8 +117,13 @@ def test_find_similar_empty_cache_returns_empty(monkeypatch):
 
 def test_match_to_dict_includes_meets_threshold():
     m = Match(
-        number=7, repo="acme/widgets", title="t", body_preview="b",
-        state="open", similarity=0.4242, meets_threshold=False,
+        number=7,
+        repo="acme/widgets",
+        title="t",
+        body_preview="b",
+        state="open",
+        similarity=0.4242,
+        meets_threshold=False,
     )
     d = m.to_dict()
     assert d["meets_threshold"] is False

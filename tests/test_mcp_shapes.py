@@ -15,28 +15,49 @@ These tests exercise only the guards. They don't make network calls.
 
 from __future__ import annotations
 
-# The mcp_server module's import path needs the repo root on sys.path;
-# conftest.py handles that for the rest of the suite.
 import mcp_server
 
-
-# Documented key sets for each tool's return dict.
 SPRINT_SHOW_KEYS = {
-    "ok", "sprint_id", "sprint_name", "state", "start_at", "end_at",
-    "completed_points", "total_points", "closed_issues_count",
-    "description", "issue_count", "issues", "pagination_warning",
+    "ok",
+    "sprint_id",
+    "sprint_name",
+    "state",
+    "start_at",
+    "end_at",
+    "completed_points",
+    "total_points",
+    "closed_issues_count",
+    "description",
+    "issue_count",
+    "issues",
+    "pagination_warning",
     "stderr",
 }
 
 SPRINT_ADD_KEYS = {
-    "ok", "sprint_id", "sprint_name", "outcome",
-    "success_count", "failed_count", "succeeded", "failed", "stderr",
+    "ok",
+    "sprint_id",
+    "sprint_name",
+    "outcome",
+    "success_count",
+    "failed_count",
+    "succeeded",
+    "failed",
+    "stderr",
 }
 
 SPRINT_REMOVE_KEYS = {
-    "ok", "sprint_id", "sprint_name", "outcome",
-    "success_count", "failed_count", "succeeded", "failed",
-    "inspected_full", "pagination_warning", "response_anomaly",
+    "ok",
+    "sprint_id",
+    "sprint_name",
+    "outcome",
+    "success_count",
+    "failed_count",
+    "succeeded",
+    "failed",
+    "inspected_full",
+    "pagination_warning",
+    "response_anomaly",
     "stderr",
 }
 
@@ -48,7 +69,8 @@ def _has_keys(d: dict, expected: set[str]) -> bool:
     return True
 
 
-# ---- sprint_show --------------------------------------------------------
+    # ---- sprint_show --------------------------------------------------------
+
 
 def test_sprint_show_empty_name_returns_full_shape():
     r = mcp_server.sprint_show("")
@@ -63,7 +85,8 @@ def test_sprint_show_whitespace_name_returns_full_shape():
     _has_keys(r, SPRINT_SHOW_KEYS)
 
 
-# ---- sprint_add_issues -------------------------------------------------
+    # ---- sprint_add_issues -------------------------------------------------
+
 
 def test_sprint_add_empty_issue_numbers_returns_full_shape():
     r = mcp_server.sprint_add_issues("Sprint 7", [])
@@ -85,7 +108,8 @@ def test_sprint_add_whitespace_sprint_name_returns_full_shape():
     _has_keys(r, SPRINT_ADD_KEYS)
 
 
-# ---- sprint_remove_issues ----------------------------------------------
+    # ---- sprint_remove_issues ----------------------------------------------
+
 
 def test_sprint_remove_empty_issue_numbers_returns_full_shape():
     r = mcp_server.sprint_remove_issues("Sprint 7", [])
@@ -111,16 +135,25 @@ def test_sprint_remove_full_shape_includes_new_fields():
     assert "response_anomaly" in r
 
 
-# ---- subissue_add_children / subissue_remove_children (round-3 #4) -------
+    # ---- subissue_add_children / subissue_remove_children (round-3 #4) -------
 
 SUBISSUE_MUTATION_KEYS = {
-    # v1.9.2 round-4 (PR #27) findings #2 + #14: `parent` (cross-surface
-    # alias for parent_number), `unaccounted`, and `failed_unknown_count`
-    # are all part of the documented contract on every return path.
-    "ok", "partial_applied", "parent_number", "parent", "outcome",
-    "success_count", "failed_count", "succeeded", "failed",
-    "unaccounted", "failed_unknown_count",
-    "github_errors", "partial_success_warning", "stderr",
+    # v1.9.2 round-4 (PR #27) findings #2 + #14: `parent` (cross-surface alias for parent_number), `unaccounted`, and
+    # `failed_unknown_count` are all part of the documented contract on every return path.
+    "ok",
+    "partial_applied",
+    "parent_number",
+    "parent",
+    "outcome",
+    "success_count",
+    "failed_count",
+    "succeeded",
+    "failed",
+    "unaccounted",
+    "failed_unknown_count",
+    "github_errors",
+    "partial_success_warning",
+    "stderr",
 }
 
 
@@ -158,23 +191,16 @@ def test_run_zh_strips_ansi_from_stderr_plain(monkeypatch):
     def fake_run(*args, **kwargs):
         return _FakeResult()
 
-    # Patch ZH_BIN.exists so _run_zh proceeds past the early-return
-    # binary-missing branch.
     import pathlib
-    monkeypatch.setattr(
-        pathlib.Path, "exists", lambda self: True
-    )
+
+    monkeypatch.setattr(pathlib.Path, "exists", lambda self: True)
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     result = mcp_server._run_zh(["test"])
-    # Original streams retain escape codes
     assert "\x1b[31m" in result["stdout"]
     assert "\x1b[31m" in result["stderr"]
-    # _plain variants strip them
     assert result["stdout_plain"] == "foo"
-    assert result["stderr_plain"] == "Error: not found", (
-        f"stderr_plain should be ANSI-free; got {result['stderr_plain']!r}"
-    )
+    assert result["stderr_plain"] == "Error: not found", f"stderr_plain should be ANSI-free; got {result['stderr_plain']!r}"
 
 
 def test_run_zh_binary_missing_returns_stderr_plain():
@@ -191,6 +217,7 @@ def test_run_zh_binary_missing_returns_stderr_plain():
     """
     import pathlib
     from unittest.mock import patch
+
     with patch.object(pathlib.Path, "exists", return_value=False):
         result = mcp_server._run_zh(["test"])
     assert "stderr_plain" in result
@@ -228,20 +255,15 @@ def test_run_zh_timeout_stderr_includes_captured_diagnostic(monkeypatch):
         raise exc
 
     import pathlib
+
     monkeypatch.setattr(pathlib.Path, "exists", lambda self: True)
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     result = mcp_server._run_zh(["test"], timeout=5.0)
-    # stderr retains the captured diagnostic (with ANSI)
-    assert "fatal: about to fail" in result["stderr"], (
-        f"Round-7 #5: stderr must include the captured diagnostic; "
-        f"got {result['stderr']!r}"
-    )
+    assert "fatal: about to fail" in result["stderr"], f"Round-7 #5: stderr must include the captured diagnostic; got {result['stderr']!r}"
     assert "\x1b[31m" in result["stderr"]
-    # stderr_plain has the same content with ANSI stripped
     assert "fatal: about to fail" in result["stderr_plain"]
     assert "\x1b[31m" not in result["stderr_plain"]
-    # Both fields include the synthetic timeout suffix
     assert "timed out after" in result["stderr"]
     assert "timed out after" in result["stderr_plain"]
 
@@ -256,17 +278,27 @@ def test_run_zh_timeout_no_captured_stderr_keeps_synthetic_only(monkeypatch):
             cmd=args[0],
             timeout=kwargs.get("timeout", 60),
         )
-        # exc.stdout / exc.stderr default to None when unset
         raise exc
 
     import pathlib
+
     monkeypatch.setattr(pathlib.Path, "exists", lambda self: True)
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     result = mcp_server._run_zh(["test"], timeout=5.0)
-    # No spurious leading newline when there's no captured diagnostic
-    assert not result["stderr"].startswith("\n"), (
-        f"unexpected leading newline: {result['stderr']!r}"
-    )
+    assert not result["stderr"].startswith("\n"), f"unexpected leading newline: {result['stderr']!r}"
     assert "timed out after" in result["stderr"]
     assert result["stderr"] == result["stderr_plain"]  # no ANSI to strip
+
+
+    # ---- edit_issue ---------------------------------------------------------
+
+EDIT_ISSUE_KEYS = {"ok", "partial_applied", "number", "raw", "stderr"}
+
+
+def test_edit_issue_empty_returns_full_shape():
+    r = mcp_server.edit_issue(42)
+    assert r["ok"] is False
+    assert "title" in r["stderr"].lower() or "description" in r["stderr"].lower()
+    _has_keys(r, EDIT_ISSUE_KEYS)
+    assert r["number"] == 42

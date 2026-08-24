@@ -2,24 +2,15 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
-
 import zh_api
 
 
 def test_load_config_parses_simple_kv(tmp_path: Path):
     path = tmp_path / "config"
-    path.write_text(
-        "# Comment line\n"
-        "\n"
-        "ZH_TOKEN=abc123\n"
-        "ZH_REST_TOKEN=def456\n"
-        "ZH_WORKSPACE=My Team\n"
-    )
+    path.write_text("# Comment line\n\nZH_TOKEN=abc123\nZH_REST_TOKEN=def456\nZH_WORKSPACE=My Team\n")
     cfg = zh_api.load_config(path)
     assert cfg["ZH_TOKEN"] == "abc123"
     assert cfg["ZH_REST_TOKEN"] == "def456"
@@ -29,10 +20,7 @@ def test_load_config_parses_simple_kv(tmp_path: Path):
 def test_load_config_handles_quotes_and_export(tmp_path: Path):
     """Quoted values + export prefix both supported."""
     path = tmp_path / "config"
-    path.write_text(
-        'export ZH_TOKEN="abc123"\n'
-        "ZH_WORKSPACE='Backend Team'\n"
-    )
+    path.write_text("export ZH_TOKEN=\"abc123\"\nZH_WORKSPACE='Backend Team'\n")
     cfg = zh_api.load_config(path)
     assert cfg["ZH_TOKEN"] == "abc123"
     assert cfg["ZH_WORKSPACE"] == "Backend Team"
@@ -65,10 +53,12 @@ def test_repos_match_handles_missing_fields():
     """Defense in depth on the case-insensitive comparison."""
     assert not zh_api.repos_match({}, "acme/widgets")
     assert not zh_api.repos_match(
-        {"ownerName": "acme"}, "acme/widgets"  # missing name
+        {"ownerName": "acme"},
+        "acme/widgets",  # missing name
     )
     assert not zh_api.repos_match(
-        {"name": "widgets"}, "acme/widgets"  # missing ownerName
+        {"name": "widgets"},
+        "acme/widgets",  # missing ownerName
     )
 
 
@@ -100,15 +90,12 @@ def test_owner_repo_url_regex_with_dots_in_repo_name():
         ("https://github.com/acme/docs.github.io", "acme/docs.github.io"),
         ("https://github.com/acme/internal.docs.git", "acme/internal.docs"),
         ("git@github.com:acme/my.tool", "acme/my.tool"),
-        # Owner with dots also works (always did, but worth pinning)
         ("https://github.com/owner.with.dots/repo", "owner.with.dots/repo"),
     ]
     for url, expected in cases:
         m = zh_api._GH_URL_RE.search(url)
         assert m, f"failed to match {url!r}"
-        assert f"{m.group('owner')}/{m.group('repo')}" == expected, (
-            f"got {m.group('owner')}/{m.group('repo')} for {url!r}"
-        )
+        assert f"{m.group('owner')}/{m.group('repo')}" == expected, f"got {m.group('owner')}/{m.group('repo')} for {url!r}"
 
 
 def test_garbage_prefix_rejected():
@@ -128,30 +115,25 @@ def test_garbage_prefix_rejected():
     ]
     for url in garbage_inputs:
         m = zh_api._GH_URL_RE.search(url)
-        assert m is None, (
-            f"garbage-prefixed URL {url!r} should NOT match; got {m!r}"
-        )
+        assert m is None, f"garbage-prefixed URL {url!r} should NOT match; got {m!r}"
 
 
-# =============================================================================
-# list_workspaces pagination (review finding #6)
-# =============================================================================
-
-def _ws_page(nodes: list[dict], *, has_next: bool = False,
-             end_cursor: str | None = None) -> dict:
+def _ws_page(nodes: list[dict], *, has_next: bool = False, end_cursor: str | None = None) -> dict:
     """Workspaces-connection page wrapper used by the tests below."""
     return {
         "data": {
-            "repositoriesByGhId": [{
-                "id": "repo-gid-123",
-                "workspacesConnection": {
-                    "pageInfo": {
-                        "hasNextPage": has_next,
-                        "endCursor": end_cursor,
+            "repositoriesByGhId": [
+                {
+                    "id": "repo-gid-123",
+                    "workspacesConnection": {
+                        "pageInfo": {
+                            "hasNextPage": has_next,
+                            "endCursor": end_cursor,
+                        },
+                        "nodes": nodes,
                     },
-                    "nodes": nodes,
-                },
-            }]
+                }
+            ]
         }
     }
 
@@ -167,12 +149,15 @@ def test_list_workspaces_walks_pagination(monkeypatch):
 
     page_one = [{"id": f"ws-{i}", "name": f"Workspace {i}"} for i in range(50)]
     page_two = [{"id": "ws-50", "name": "Older Workspace"}]
-    responses = iter([
-        _ws_page(page_one, has_next=True, end_cursor="cursor-2"),
-        _ws_page(page_two, has_next=False),
-    ])
+    responses = iter(
+        [
+            _ws_page(page_one, has_next=True, end_cursor="cursor-2"),
+            _ws_page(page_two, has_next=False),
+        ]
+    )
     monkeypatch.setattr(
-        zh_api, "graphql_request",
+        zh_api,
+        "graphql_request",
         lambda *a, **kw: next(responses),
     )
     nodes = zh_api.list_workspaces("acme/widgets", token="t", gh_token="t")
@@ -184,24 +169,29 @@ def test_list_workspaces_walks_pagination(monkeypatch):
 def test_get_workspace_id_resolves_name_on_page_two(monkeypatch):
     """End-to-end: name lookup hits a workspace on page 2."""
     monkeypatch.setattr(zh_api, "get_gh_repo_id", lambda *a, **kw: 123)
-    responses = iter([
-        _ws_page(
-            [{"id": f"ws-{i}", "name": f"Front {i}"} for i in range(50)],
-            has_next=True, end_cursor="cursor-2",
-        ),
-        _ws_page(
-            [{"id": "ws-deep", "name": "Deep Workspace"}],
-            has_next=False,
-        ),
-    ])
+    responses = iter(
+        [
+            _ws_page(
+                [{"id": f"ws-{i}", "name": f"Front {i}"} for i in range(50)],
+                has_next=True,
+                end_cursor="cursor-2",
+            ),
+            _ws_page(
+                [{"id": "ws-deep", "name": "Deep Workspace"}],
+                has_next=False,
+            ),
+        ]
+    )
     monkeypatch.setattr(
-        zh_api, "graphql_request",
+        zh_api,
+        "graphql_request",
         lambda *a, **kw: next(responses),
     )
     ws_id = zh_api.get_workspace_id(
         "acme/widgets",
         workspace_name="deep workspace",
-        token="t", gh_token="t",
+        token="t",
+        gh_token="t",
     )
     assert ws_id == "ws-deep"
 
@@ -215,10 +205,10 @@ def test_list_workspaces_stuck_cursor_bails(monkeypatch):
         end_cursor=None,  # explicitly missing
     )
     monkeypatch.setattr(
-        zh_api, "graphql_request",
+        zh_api,
+        "graphql_request",
         lambda *a, **kw: stuck,
     )
-    # Should return whatever was collected before bailing, not spin.
     nodes = zh_api.list_workspaces("acme/widgets", token="t", gh_token="t")
     assert {n["id"] for n in nodes} == {"ws-a"}
 
@@ -236,21 +226,20 @@ def test_list_workspaces_preserves_page1_on_page2_empty(monkeypatch):
     monkeypatch.setattr(zh_api, "get_gh_repo_id", lambda *a, **kw: 123)
     page1 = _ws_page(
         [{"id": f"ws-{i}", "name": f"W{i}"} for i in range(50)],
-        has_next=True, end_cursor="cur1",
+        has_next=True,
+        end_cursor="cur1",
     )
     # Page 2: empty repositoriesByGhId (transient blip)
     page2 = {"data": {"repositoriesByGhId": []}}
     responses = iter([page1, page2])
     monkeypatch.setattr(
-        zh_api, "graphql_request",
+        zh_api,
+        "graphql_request",
         lambda *a, **kw: next(responses),
     )
     nodes = zh_api.list_workspaces("acme/widgets", token="t", gh_token="t")
     # SPEC: all 50 page-1 workspaces preserved, no raise.
-    assert len(nodes) == 50, (
-        f"page-1 state discarded on page-2 blip; got {len(nodes)} "
-        f"workspaces, expected 50"
-    )
+    assert len(nodes) == 50, f"page-1 state discarded on page-2 blip; got {len(nodes)} workspaces, expected 50"
 
 
 def test_list_workspaces_raises_when_page1_empty(monkeypatch):
@@ -261,7 +250,8 @@ def test_list_workspaces_raises_when_page1_empty(monkeypatch):
     monkeypatch.setattr(zh_api, "get_gh_repo_id", lambda *a, **kw: 123)
     page1 = {"data": {"repositoriesByGhId": []}}
     monkeypatch.setattr(
-        zh_api, "graphql_request",
+        zh_api,
+        "graphql_request",
         lambda *a, **kw: page1,
     )
     with pytest.raises(zh_api.ZhApiError) as exc:
@@ -269,16 +259,14 @@ def test_list_workspaces_raises_when_page1_empty(monkeypatch):
     assert "no zenhub repository found" in str(exc.value).lower()
 
 
-# =============================================================================
-# Env-var contract: resolve_context honors the same vars bash exports
-# =============================================================================
-
 def _patch_context_deps(monkeypatch):
     """Stub out the network parts of resolve_context."""
     monkeypatch.setattr(zh_api, "resolve_token", lambda config=None: "tok")
+    monkeypatch.setattr(zh_api, "get_gh_repo_id", lambda *a, **kw: 12345)
     monkeypatch.setattr(zh_api, "get_zenhub_repo_id", lambda *a, **kw: "repo-gid")
     monkeypatch.setattr(
-        zh_api, "get_workspace_id",
+        zh_api,
+        "get_workspace_id",
         lambda owner_repo, **kw: f"ws-for-{kw.get('workspace_name') or 'default'}",
     )
     monkeypatch.setattr(zh_api, "load_config", lambda *a, **kw: {})
@@ -296,7 +284,6 @@ def test_resolve_context_reads_zh_workspace_name(monkeypatch):
     # Set ZH_WORKSPACE to a different value to make sure _NAME wins
     monkeypatch.setenv("ZH_WORKSPACE", "Should Be Ignored")
     ctx = zh_api.resolve_context(owner_repo="acme/widgets")
-    # get_workspace_id stub bakes the name into the returned id
     assert ctx.workspace_id == "ws-for-Backend Team"
 
 
@@ -323,9 +310,6 @@ def test_resolve_context_falls_back_to_zh_repo(monkeypatch):
     _patch_context_deps(monkeypatch)
     monkeypatch.delenv("ZH_REPO_OVERRIDE", raising=False)
     monkeypatch.setenv("ZH_REPO", "env/repo")
-    # Don't stub get_owner_repo_from_git — if our env handling is
-    # broken and we fall through, the call will raise (no git remote
-    # in pytest cwd).
     ctx = zh_api.resolve_context()
     assert ctx.owner_repo == "env/repo"
 
@@ -344,7 +328,5 @@ def test_resolve_context_explicit_workspace_arg_wins(monkeypatch):
     _patch_context_deps(monkeypatch)
     monkeypatch.setenv("ZH_WORKSPACE_NAME", "ignored-flag-name")
     monkeypatch.setenv("ZH_WORKSPACE", "ignored-config-name")
-    ctx = zh_api.resolve_context(
-        owner_repo="acme/widgets", workspace_name="From Arg"
-    )
+    ctx = zh_api.resolve_context(owner_repo="acme/widgets", workspace_name="From Arg")
     assert ctx.workspace_id == "ws-for-From Arg"

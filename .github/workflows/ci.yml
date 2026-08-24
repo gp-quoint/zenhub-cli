@@ -1,8 +1,4 @@
-# Continuous integration: bash + Python syntax checks.
-#
-# This workflow needs NO secrets and is safe to run on every push and PR,
-# including PRs from forks. The secret-sensitive Claude review workflows are
-# separate files, each gated by their own posture.
+# Continuous integration: Python lint, typecheck, and tests (uv).
 
 name: CI
 
@@ -18,44 +14,32 @@ jobs:
   syntax:
     runs-on: ubuntu-latest
     strategy:
-      # Enforce the Python compatibility floor advertised in README's badge
-      # (3.10+). 3.10 is the floor because the code uses PEP 604 union syntax
-      # (`X | None`) and PEP 585 builtin generics (`list[str]`) as runtime
-      # annotations; both are 3.10 features. 3.12 catches removed-feature
-      # regressions. fail-fast: false so a problem in one version doesn't
-      # mask problems in others.
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.13"]
     steps:
-      # SHA-pinned actions/checkout v4.2.2
       - name: Check out the repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: Bash syntax check (zh)
-        run: bash -n zh
-
-      # SHA-pinned actions/setup-python v5.3.0
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+      - name: Install uv
+        uses: astral-sh/setup-uv@3b5b9329f8b0348e98550618ad5ad8a8e2d3a1b0 # v5.3.1
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Python syntax check (MCP server, GraphQL client + similarity)
-        run: python -m py_compile mcp_server.py zh_api.py zh_graphql_ops.py similarity.py
+      - name: Sync dependencies
+        run: uv sync --all-groups
 
-      # Install the test deps from requirements-dev.txt (pytest + numpy),
-      # the single declared source shared with the local-venv instructions
-      # in CONTRIBUTING.md. The tests mock the network and the embedding
-      # model entirely, so they do NOT need mcp / sentence-transformers /
-      # torch (the ~1GB of heavy wheels) — those are exercised at MCP
-      # runtime, not here. numpy IS needed: the similarity-scoring tests
-      # construct fake normalized embedding vectors to exercise
-      # find_similar's threshold + min_results math; ~15MB, negligible.
-      - name: Install test deps
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements-dev.txt
+      - name: Ruff check
+        run: uv run ruff check src
+
+      - name: Ruff format check
+        run: uv run ruff format --check src
+
+      - name: Basedpyright (strict)
+        run: uv run basedpyright src/zh/cli src/zh/commands src/zh/issue_ops.py src/zh/workspace_ops.py src/zh/gh_ops.py src/zh/planning_ops.py src/zh/deps_ops.py src/zh/types.py src/zh/schemas.py src/zh/json_helpers.py
+
+      - name: CLI smoke test
+        run: uv run zh version
 
       - name: Run pytest
-        run: python -m pytest tests/ -v
+        run: uv run pytest tests/ -v

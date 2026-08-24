@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![GitHub release](https://img.shields.io/github/v/release/daniel-pittman/zenhub-cli)](https://github.com/daniel-pittman/zenhub-cli/releases)
 [![CI](https://github.com/daniel-pittman/zenhub-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/daniel-pittman/zenhub-cli/actions/workflows/ci.yml)
-[![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Python](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 
 A powerful command-line interface for ZenHub. Manage issues, pipelines, sprints, and more directly from your terminal.
 
@@ -66,6 +66,8 @@ source ~/.zshrc
 # Or create a symlink:
 sudo ln -sf ~/.zenhub-cli/zh /usr/local/bin/zh
 ```
+
+Keep `zh` and the rest of the checkout together — symlinking only `zh` into PATH is fine because the launcher resolves to the install directory.
 
 ### Option 2: Direct Download
 
@@ -132,6 +134,19 @@ Precedence (highest first): `-r` / `-w` flag → `ZH_REPO` / `ZH_WORKSPACE` env 
 
 `zh workspaces` shows every workspace the repo is connected to and marks which one the rest of the CLI would currently target.
 
+### GraphQL caching (`bkt`)
+
+When [`bkt`](https://github.com/dimo414/bkt) is on `PATH`, read-only GraphQL calls are cached (default TTL `5m`, scope `zh-graphql`). Mutations are never cached and **invalidate** the read cache (in-process + `bkt` via a gen-file mtime) so the next `zh pipeline` / `zh sprint` sees fresh membership. Useful knobs:
+
+| Variable | Purpose |
+|---|---|
+| `ZH_BKT=0` | Disable caching |
+| `ZH_BKT_TTL` | TTL passed to `bkt --ttl` (default `5m`) |
+| `ZH_BKT_FORCE=1` | Bust cache for this process |
+| `ZH_GRAPHQL_CACHE_GEN` | Override path of the mutation gen file (default `~/.cache/zh/graphql-cache.gen`) |
+
+In `zh browse`, **ctrl-r** force-reloads and busts the cache; view switches (`alt-s` / `alt-m` / `alt-a`) reuse warm entries when TTL allows. Editing: **ctrl-t** opens `$EDITOR` for title/body, **ctrl-e** adds a comment. **enter** opens the issue view (truncated issue in the fzf header, comments as one-liners); there enter / **ctrl-e** view or edit a selected comment. **ctrl-o** opens the issue URL in the browser (main list and issue view); **alt-o** pages the full issue (title, body, comments) in `less`.
+
 ### Alternative: Project-level Config
 
 You can also create a `.env` file in your project directory:
@@ -146,7 +161,7 @@ ZH_REST_TOKEN=your_rest_token_here
 
 | Command | Aliases | Description |
 |---------|---------|-------------|
-| `issue <number>` | `i`, `show` | View issue details |
+| `issue <number>` | `i`, `show` | View issue details (description + comments) |
 | `mine [user]` | `my` | List issues assigned to you (or specified user) |
 | `board [--all]` | `b`, `overview` | Show board overview with issue counts |
 | `pipeline <name> [--all]` | `pipe`, `col` | List issues in a specific pipeline |
@@ -157,9 +172,10 @@ ZH_REST_TOKEN=your_rest_token_here
 | `assign <issue> <user> [user...]` | | Assign one or more users to an issue |
 | `unassign <issue> <user> [user...]` | | Remove the named assignee(s) |
 | `unassign <issue> --all` | | Remove ALL assignees (explicit) |
-| `comment <issue> [text]` | `c` | Add a comment to an issue |
+| `comment <issue> [text]` | `c` | Add a comment (`$EDITOR` if no text); `comment edit <issue> [N]` edits **your** comment N |
+| `edit <issue> [opts]` | `e` | Edit title/description (`$EDITOR` by default; `-t`/`-d`/`-f` non-interactive) |
 | `attach <issue>` | | Open issue in browser to add attachments |
-| `close <issue> [comment]` | | Close an issue |
+| `close <issue> [comment]` | | Close an issue (`-r completed\|not planned\|duplicate`) |
 | `reopen <issue>` | | Reopen a closed issue |
 | `delete <issue> [-y]` | | **Permanently delete** a GitHub issue (via `gh`; needs admin/triage). Prompts to confirm when interactive; `-y`/`--yes` skips. Prefer `close`. |
 | `create <title> [options]` | `new` | Create a new issue (`--json` / `-q` for machine output, `--parent` to nest) |
@@ -256,6 +272,9 @@ zh unassign 42 --all         # Remove ALL assignees (explicit)
 ### Comments
 
 ```bash
+# Open $EDITOR to compose a comment
+zh comment 42
+
 # Add inline comment
 zh comment 42 "Fixed in PR #99"
 
@@ -265,8 +284,41 @@ zh comment 42 -m "Still investigating this issue"
 # From file (for longer comments)
 zh comment 42 -f ./investigation-notes.md
 
-# From stdin (useful for piping)
+# From stdin
 echo "Automated update: build passed" | zh comment 42 --stdin
+
+# Edit an existing comment (N matches the 1-based index in `zh issue`)
+# GitHub only allows editing YOUR comments — the picker lists those only.
+zh comment edit 42 1                 # opens $EDITOR
+zh comment edit 42                   # interactive picker among your comments
+zh comment edit 42 1 -m "new body"   # non-interactive
+zh comment edit 42 1 -f ./note.md
+echo "new body" | zh comment edit 42 1 --stdin
+
+# Deferred URL fill: post with {{PLACEHOLDERS}}, then fill after gh pr create
+zh comment 42 -m $'Opened PRs:\n- Python: {{PYTHON_PR}}\n- Go: {{GO_PR}}'
+zh comment edit 42 2 \
+  --fill PYTHON_PR=https://github.com/org/py/pull/1 \
+  --fill GO_PR=https://github.com/org/go/pull/1
+```
+
+### Edit issue title / description
+
+```bash
+# Open $EDITOR seeded with title on line 1, blank line, then body
+zh edit 42
+
+# Non-interactive
+zh edit 42 -t "New title"
+zh edit 42 -t "New title" -d "New description"
+zh edit 42 -f ./description.md
+```
+
+### Attachments
+
+```bash
+# Open the issue in the browser to drag-and-drop attachments
+zh attach 42
 ```
 
 ### Create Issues
@@ -342,6 +394,11 @@ zh close 42
 
 # Close with a comment
 zh close 42 "Completed in PR #99"
+
+# Close with a GitHub reason
+zh close 42 --reason completed
+zh close 42 --reason "not planned" -c "Out of scope for this quarter"
+zh close 42 --reason duplicate --duplicate-of 10
 
 # Reopen a closed issue
 zh reopen 42
@@ -492,9 +549,18 @@ $ zh issue 100
   Pipeline:  In Progress
   ...
   Parent:    #42 Auth Service refactor pass
-  Sub-issues: 3 (see 'zh subissue list 100')
+  Children:  3 (see 'zh subissue list 100')
   ZenHub:    https://app.zenhub.com/workspaces/.../issues/gh/acme/widget-service/100
   GitHub:    https://github.com/acme/widget-service/issues/100
+
+Description:
+
+  Extract shared validation into helpers used by login and signup.
+
+Comments (1):
+
+  @alice · 2026-05-12
+    Started in PR #101 — leave the old path until the cutover lands.
 ```
 
 **Sub-issue subcommands:**
@@ -555,6 +621,9 @@ Issues (5):
     ✓ Wire up refresh-token endpoint
     → https://github.com/acme/widgets/issues/101
 ```
+
+Issues are listed in board pipeline order (left-to-right), then by issue
+number within each pipeline. `zh mine` uses the same ordering.
 
 Sprint membership mutations:
 
@@ -813,7 +882,7 @@ For multi-project use, the typical pattern is to pass `repo_path` explicitly on 
 
 ### Requirements
 
-- Python 3.10+ available on PATH (the server probes common locations: PATH default, Homebrew, pyenv shims, system Python).
+- Python 3.13+ available on PATH (the server probes common locations: PATH default, Homebrew, pyenv shims, system Python).
 - All the same requirements as `zh` itself (authenticated `gh` CLI, `ZH_TOKEN` configured, `jq`, `curl`).
 - For the similarity-search tools: ~500MB of disk space the first time it runs — `sentence-transformers` installs `torch` + `transformers` into the MCP venv (~400MB) and the embedding model itself caches under `~/.cache/huggingface/` (~80MB).
 
@@ -864,7 +933,7 @@ Contributions are welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full
 
 - Branch off `develop` (the default branch); `main` only receives release PRs.
 - Run the test suite in a virtualenv: `python -m venv .venv && .venv/bin/python -m pip install -r requirements-dev.txt && .venv/bin/python -m pytest tests/`.
-- Every PR runs the `syntax` checks (bash + Python + pytest across 3.10/3.11/3.12), a Semgrep scan, and an automated Claude review whose verdict drives the `review-gate` merge check.
+- Every PR runs the `syntax` checks (Python lint, typecheck, and pytest on 3.13), a Semgrep scan, and an automated Claude review whose verdict drives the `review-gate` merge check.
 
 Security issues go through [`SECURITY.md`](SECURITY.md), not the public tracker.
 

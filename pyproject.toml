@@ -1,0 +1,100 @@
+[project]
+name = "zenhub-cli"
+dynamic = ["version"]
+description = "Command-line interface for ZenHub backlog operations"
+readme = "README.md"
+requires-python = ">=3.13"
+license = { text = "MIT" }
+authors = [{ name = "zenhub-cli contributors" }]
+dependencies = [
+    "click>=8.0",
+    "loguru>=0.7",
+    "numpy>=1.26",
+    "rich>=13.7",
+    "sentence-transformers>=3.0",
+    "typer>=0.15",
+]
+
+[project.scripts]
+zh = "zh.cli.main:run"
+
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/zh/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/zh"]
+
+[dependency-groups]
+dev = [
+    "basedpyright>=1.29",
+    "pre-commit>=4.0",
+    "pytest>=8.0",
+    "ruff>=0.9",
+]
+
+[tool.ruff]
+line-length = 150
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "A",
+    "ARG",
+    "B",
+    "BLE",
+    "C4",
+    "C90",
+    "DTZ",
+    "E",
+    "F",
+    "FBT",
+    "I",
+    "ICN",
+    "ISC",
+    "N",
+    "PIE",
+    "PL",
+    "PT",
+    "RET",
+    "RSE",
+    "RUF",
+    "S",
+    "SIM",
+    "T10",
+    "TID",
+    "UP",
+    "W",
+]
+ignore = [
+    "FBT001",
+    "FBT002",
+    "PLR0913",
+    "S101",
+    "S603",
+    "S607",
+    "T201",
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 8
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ARG", "PLR2004", "S101"]
+
+[tool.basedpyright]
+include = ["src"]
+exclude = ["**/__pycache__", ".venv"]
+pythonVersion = "3.13"
+typeCheckingMode = "strict"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]

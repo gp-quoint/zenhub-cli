@@ -1,68 +1,26 @@
 #!/usr/bin/env python3
 """
-ZenHub MCP server — exposes ZenHub backlog operations to any Claude Code session
-on this machine via the `zh` CLI.
+ZenHub MCP server — exposes ZenHub backlog operations via the `zh` CLI.
 
-Wraps tools/zh so that:
-  - Read tools (board, pipeline, issue, mine, epic_list, epic_show,
-    subissue_list) return structured data parseable by callers.
-  - Write tools (create_issue, close_issue, move_issue, reorder, comment,
-    epic_create, epic_update, epic_add_children, epic_remove_children,
-    epic_close, epic_reopen, subissue_add_children, subissue_remove_children,
-    subissue_reorder, assign, unassign, estimate) are explicit verbs
-    so callers can audit which destructive operations they invoked.
+Read tools return structured data; write tools are explicit verbs for auditability.
+Every tool accepts optional `repo_path` (git checkout cwd for `zh`); otherwise
+ZH_DEFAULT_REPO_PATH or the server launch cwd.
 
-v1.9.0 model migration: ZenHub removed Legacy Epics and ZenhubEpics in June
-2025. The epic_* tools no longer hit the dead ZenhubEpic API; an epic is now a
-normal issue whose issue-type is Epic, with children wired via Sub-Issues. The
-same machinery backs first-class tools for every planning level (initiative /
-project / epic / subtask) plus set_issue_type and list_priorities. Type
-discovery uses assignableIssueTypes (the full 5-level hierarchy), not the old
-githubIssueTypes repo query.
+Self-bootstraps a venv under XDG_DATA_HOME (~/.local/share/zh/venv) on first run.
 
-Every tool optionally accepts a `repo_path` argument — the absolute path of a
-git checkout that the underlying `zh` invocation runs from. This is required
-because `zh` detects the GitHub repo via `git config --get remote.origin.url`
-from its working directory. If omitted, falls back to:
-  1. ZH_DEFAULT_REPO_PATH environment variable
-  2. The MCP server's current working directory at launch time
+Register (user scope):
+    claude mcp add --scope user zenhub /usr/bin/python3 /path/to/mcp_server.py
 
-Run as a subprocess (stdio transport):
-    /usr/bin/python3 mcp_server.py
-
-The script self-bootstraps a durable venv under XDG_DATA_HOME (default
-`~/.local/share/zh/venv`) on first run, validates it on every launch, and
-re-execs under that venv. Any python3 on PATH that can run `python3 -m venv`
-works as the launcher.
-
-Register user-scope so every Claude Code session sees it:
-    claude mcp add --scope user zenhub \\
-        /usr/bin/python3 \\
-        /path/to/zenhub-cli/mcp_server.py
-
-Environment overrides:
-  ZH_DEFAULT_REPO_PATH — default git-checkout dir to run zh from
-                         (otherwise uses MCP server cwd at launch)
-  ZH_BIN_PATH          — path to zh bash script (default: peer to this file)
-  ZH_MCP_VENV          — full ABSOLUTE path of the venv directory to use;
-                         overrides the XDG_DATA_HOME-derived default. Useful
-                         for pinning to a project-local venv during
-                         development. Relative paths are rejected.
-  XDG_DATA_HOME        — standard XDG override for the data root; the venv
-                         is created at `$XDG_DATA_HOME/zh/venv`.
-  ZH_MCP_PROBE_TIMEOUT — seconds for the per-launch `import` probe that
-                         validates the venv (default 30). Widen on slow
-                         media (NFS home, FileVault cold cache) where the
-                         import can otherwise time out and trigger a
-                         needless rebuild.
+Environment: ZH_DEFAULT_REPO_PATH, ZH_BIN_PATH, ZH_MCP_VENV (absolute path only),
+XDG_DATA_HOME, ZH_MCP_PROBE_TIMEOUT (default 30), ZH_MCP_SKIP_BOOTSTRAP (tests only).
 """
+
 
 from __future__ import annotations
 
 import fcntl
 import hashlib
 import json
-import logging
 import os
 import re
 import shutil
@@ -71,18 +29,9 @@ import sys
 from contextlib import contextmanager
 from pathlib import Path
 
-# Module logger (issue #39): diagnostics from the outcome-sentinel parser
-# route through the standard logging machinery instead of a raw stderr
-# write, so operators of a long-running MCP stdio server can configure
-# where MCP-internal logs go without those lines colliding with FastMCP's
-# framing-adjacent stderr output.
-log = logging.getLogger(__name__)
-
-# -----------------------------------------------------------------------------
 # Self-bootstrap: build (or rebuild, if broken / stale) a durable venv under
 # XDG_DATA_HOME, validate it, and re-exec under it. Must run before any
 # third-party import (mcp).
-# -----------------------------------------------------------------------------
 
 
 def _default_venv_dir() -> tuple[Path, bool]:
@@ -105,7 +54,6 @@ def _default_venv_dir() -> tuple[Path, bool]:
     """
     raw_override = os.environ.get("ZH_MCP_VENV")
     if raw_override is not None and not raw_override.strip():
-        # Distinguish unset from set-to-empty so a CI/Docker config that
         # did `ENV ZH_MCP_VENV=` (clearing an inherited value) or
         # `ZH_MCP_VENV="$UNSET_VAR"` doesn't silently fall through to
         # XDG. Surface the situation; still fall through so the launch
@@ -131,7 +79,6 @@ def _default_venv_dir() -> tuple[Path, bool]:
         if not expanded.is_absolute():
             # A relative ZH_MCP_VENV (e.g. `./venv` or `venv`) would be
             # `.resolve()`-d against whatever cwd the MCP launched from.
-            # Claude Code launches the server from different project
             # repo_paths, so a relative path produces a DIFFERENT venv
             # per project — orphaned ~500MB venvs scattered across
             # trees. Require an absolute (or `~`-prefixed) path.
@@ -172,12 +119,8 @@ def _default_venv_dir() -> tuple[Path, bool]:
 # [0] would make every launch slow without tripping any error — exactly
 # the cost the per-launch/full probe split exists to avoid.
 _VENV_DEPS = (
+    "loguru",
     "mcp",
-    # similarity search: sentence-transformers brings in torch + transformers
-    # + huggingface_hub. The model weights themselves are cached under
-    # ~/.cache/huggingface/ so they survive even if the venv is rebuilt.
-    "sentence-transformers",
-    "numpy",
 )
 _VENV_MIN_PY = (3, 10)  # mcp package requires >= 3.10
 _VENV_MARKER = ".zh-deps-hash"  # records the _VENV_DEPS hash this venv was built for
@@ -199,7 +142,6 @@ def _probe_timeout_default() -> int:
     return int(raw) if raw.isdigit() and int(raw) > 0 else 30
 
 
-# Subprocess timeouts. The per-launch probe stays snappy (one import) so
 # slow cold-disk transformers imports don't trigger needless rebuild
 # loops; the post-build probe runs once when caches are warm anyway.
 # Captured once at import. The env override (ZH_MCP_PROBE_TIMEOUT) must
@@ -496,19 +438,14 @@ def _safe_rmtree(path: Path, *, ignore_errors: bool = False) -> None:
             path.unlink()
             return
 
-        # Bind the rmtree root in the closure so the chmod-parent
         # retry below can verify the parent it's about to chmod is
-        # INSIDE the cleanup target. Round-3 #1: when shutil.rmtree
         # fails at the root itself (e.g. `os.scandir(venv_dir)` raises),
         # `os.path.dirname(p)` is `venv_dir.parent` — a directory
-        # OUTSIDE our cleanup scope. Chmod-ing it silently downgrades
         # perms on a shared `~/.local/share/zh` or `/srv/shared/...`.
-        # Never modify dirs outside the rmtree root.
         rmtree_root = path
 
         def _handle(func, p, exc):
             # `exc` is an exception instance (the unified form). Defensive
-            # None guard: shutil can theoretically hand us something odd.
             if exc is not None and isinstance(exc, PermissionError):
                 # Permission to unlink depends on the PARENT dir's
                 # write+execute bits, not on the file's mode. Chmod the
@@ -530,7 +467,6 @@ def _safe_rmtree(path: Path, *, ignore_errors: bool = False) -> None:
 
         # Python 3.12 deprecated `onerror=(func, path, exc_info_tuple)`
         # in favor of `onexc=(func, path, exc_instance)`, and emits a
-        # DeprecationWarning to stderr on every call — which lands in
         # the MCP stdio transport's visible output. Dispatch by version
         # so 3.12+ uses onexc and 3.10/3.11 keep onerror. Both adapt to
         # the single `_handle(func, p, exc_instance)` shape.
@@ -590,7 +526,6 @@ def _build_venv(venv_dir: Path, deps_hash: str, *, user_supplied: bool) -> None:
         # rather than escaping uncaught and bricking the next launch.
         if venv_dir.exists():
             _safe_rmtree(venv_dir)
-        # Pre-create the venv dir and write the sentinel BEFORE any
         # subprocess. `python -m venv` preserves pre-existing files
         # in the target dir (it doesn't `--clear` by default), so the
         # sentinel survives the build. If anything between here and
@@ -600,8 +535,6 @@ def _build_venv(venv_dir: Path, deps_hash: str, *, user_supplied: bool) -> None:
         # automatic.
         venv_dir.mkdir()
         sentinel = venv_dir / _BUILD_SENTINEL
-        # Sentinel CONTENT is irrelevant to correctness — only its
-        # PRESENCE matters (it marks the dir as ours so a crashed build
         # is safely rebuildable). Deliberately no timestamp: a
         # machine-readable `started_at` would invite a future
         # "stale sentinel" age-check that breaks the simple
@@ -653,7 +586,6 @@ def _build_venv(venv_dir: Path, deps_hash: str, *, user_supplied: bool) -> None:
             f"up partial state; check your network (slow PyPI mirror?) "
             f"and Python installation, then retry."
         ) from exc
-    # Post-build sanity check BEFORE writing the marker. Uses the FULL
     # probe (every declared dep, not just `mcp`) so a half-installed
     # venv where `sentence-transformers` failed mid-stream isn't
     # certified good. The per-launch probe stays light to avoid cold-
@@ -697,11 +629,9 @@ def _build_venv(venv_dir: Path, deps_hash: str, *, user_supplied: bool) -> None:
         finally:
             os.close(dir_fd)
     except OSError:
-        # Directory fsync is best-effort (not supported on every
         # filesystem). The file-level fsync + atomic rename already
         # give us the critical guarantee.
         pass
-    # Sentinel last — the build is fully certified before we declare
     # it complete. A crash here leaves the marker (good) AND the
     # sentinel (also harmless — next launch will see the marker and
     # treat the venv as valid). Swallow non-FileNotFoundError too
@@ -765,7 +695,6 @@ def _venv_build_lock(venv_dir: Path, *, user_supplied: bool):
 
 
 def _bootstrap_venv() -> None:
-    # Compute paths at call time (not at module import) so a future
     # test that monkeypatches the env vars sees them — and so an
     # unreadable parent path doesn't crash module import for tests
     # that set ZH_MCP_SKIP_BOOTSTRAP=1.
@@ -787,7 +716,6 @@ def _bootstrap_venv() -> None:
     # is a symlink to the same builder interpreter as the launcher, which
     # incorrectly skips the re-exec and leaves us running outside the venv.
     if Path(sys.prefix).resolve() != venv_dir.resolve():
-        # Flush before execv: stderr is block-buffered under the MCP stdio
         # transport, so the "bootstrapping" / "rebuilding" messages would
         # otherwise be lost. `__file__` is resolved to an absolute path so
         # the child works even if a wrapper script changes cwd between
@@ -816,10 +744,8 @@ def _bootstrap_venv() -> None:
             try:
                 os.execv(str(venv_py), argv)
             except OSError as exc:
-                # Second exec failed too — the venv was rebuilt but
                 # still can't be exec'd (noexec mount, broken interpreter,
                 # SELinux/AppArmor exec denial, or a second TOCTOU race).
-                # Surface an actionable error instead of a bare OSError
                 # traceback at MCP startup.
                 raise RuntimeError(
                     f"[zenhub-mcp] failed to re-exec into {venv_py} even "
@@ -830,7 +756,6 @@ def _bootstrap_venv() -> None:
                 ) from exc
 
 
-# Test-mode escape hatch: setting ZH_MCP_SKIP_BOOTSTRAP=1 in the
 # environment skips the venv bootstrap AND substitutes a minimal
 # `FastMCP` stub for the import below. This lets the pytest suite
 # exercise the guard logic and result-dict shapes in MCP tools
@@ -843,7 +768,6 @@ if not _MCP_SKIP_BOOTSTRAP:
     _bootstrap_venv()
     from mcp.server.fastmcp import FastMCP
 else:
-    # Minimal no-op stub. `@mcp.tool()` returns the function unchanged
     # so tests can call the wrapped tool directly. The stub class is
     # callable as `FastMCP("name")` and exposes a `.run()` that just
     # raises (we don't want a test accidentally launching a server).
@@ -862,9 +786,6 @@ else:
                 "server cannot run in this mode; it's for unit tests only."
             )
 
-# =============================================================================
-# Paths and configuration
-# =============================================================================
 
 HERE = Path(__file__).resolve().parent
 ZH_BIN = Path(os.environ.get("ZH_BIN_PATH", str(HERE / "zh")))
@@ -875,10 +796,15 @@ ZH_BIN = Path(os.environ.get("ZH_BIN_PATH", str(HERE / "zh")))
 # case.
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
+_SRC = HERE / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+from zh.log import configure_mcp_logging, logger
+
+configure_mcp_logging()
 
 # ANSI escape regex — zh emits colored output for terminals; strip for MCP.
-#
-# v1.9.2 round-4 (PR #27) finding #15: extend beyond pure SGR/CSI
 # `\x1b[...m` to handle the broader CSI family (any final letter,
 # not just 'm') plus OSC sequences (`ESC ] ... BEL` / `ESC ] ... ESC \`).
 # Downstream tools that emit OSC-8 hyperlinks (`gh` with terminal-link
@@ -899,16 +825,12 @@ _ANSI_RE = re.compile(
 #     convention) isn't mistaken for the next header. Tab support is
 #     defensive — `zh` currently emits spaces.
 #   - Post-digit gap `\d+[ \t]*│`: previously `\s*` (which matches \n).
-#     Pins the single-line-match contract — a header that wraps mid-
 #     field (terminal resize, malformed unicode in a repo name) won't
 #     span lines and trip the title-walker bail-out. The walker only
 #     ever feeds one line at a time today; this is defense-in-depth.
 _ISSUE_HEADER_RE = re.compile(r"^[ \t]{0,3}#\d+[ \t]*│")
 
 
-# =============================================================================
-# Helpers
-# =============================================================================
 
 def _resolve_cwd(repo_path: str = "") -> str:
     """Resolve the working directory zh should run from.
@@ -926,42 +848,12 @@ def _resolve_cwd(repo_path: str = "") -> str:
 def _safe_int(value, default: int = 0) -> int:
     """Coerce `value` to int defensively; never raise.
 
-    v1.9.2 round-4 (PR #27) finding #8: round-3 #11 added
-    `int(r.get("exit_code") or 0)` to guard against `None` / `0` /
-    empty-string from a hypothetical serialization roundtrip. That
-    still raises `ValueError` on any non-numeric string (e.g. a
-    future `_run_zh` middleware emitting `exit_code='timeout'`
-    or `exit_code='killed'`). Wrapping it here means every
-    partial_applied derivation site degrades to `default` (0)
-    instead of raising MCP InternalError, which preserves the rest
-    of the response envelope for the agent.
-
-    v1.9.3 pattern-sweep finding #13: the bool branch's asymmetry
-    (`int(True) == 1` would otherwise apply) is INTENTIONAL.
-    Documented semantic: a bool here represents "a serialization
-    layer flipped a numeric exit_code into True/False" and cannot
-    be trusted to honestly report the underlying integer. The
-    alternative (return 1 for True) would silently encode
-    "partial-applied" for a value that may simply be the JSON
-    boolean `True`, leading every partial_applied derivation site
-    downstream to claim a partial that the subprocess never
-    signaled. Returning `default` (0) means such corrupt input is
-    treated as "no signal — pretend clean success," which is the
-    safer default because:
-      1. Partial-applied is a strong claim that triggers
-         re-verification work; falsely asserting it wastes the
-         agent's time and pollutes logs.
-      2. The corrupt-bool case has never been observed in
-         production; this branch is purely defense-in-depth.
-      3. If the bug ever DOES surface, masking it as `default`
-         leaves a louder signal (the partial path was never
-         taken) than a silent partial-applied=True would.
-    Callers must not rely on `_safe_int(True) == 1`.
+    Non-numeric strings and bools return `default` (not int(True)==1) so a
+    corrupt exit_code cannot falsely trigger partial_applied handling.
     """
     if value is None:
         return default
     if isinstance(value, bool):
-        # See module-level docstring for the asymmetric-bool rationale.
         return default
     try:
         return int(value)
@@ -975,10 +867,8 @@ def _run_zh(args: list[str], *, cwd: str | None = None,
 
     `timeout` is a soft cap on the whole invocation. ZenHub GraphQL
     queries typically return in < 5s; we cap at 60s to avoid the MCP
-    server hanging if the API is unresponsive — review note.
     """
     if not ZH_BIN.exists():
-        # Round-8 #3: align with timeout / success branches — `stderr`
         # and `stderr_plain` carry the same content, just with vs.
         # without ANSI escapes. This message is plain ASCII so the
         # two are identical, but callers comparing the fields (or
@@ -1002,12 +892,9 @@ def _run_zh(args: list[str], *, cwd: str | None = None,
             timeout=timeout,
         )
     except subprocess.TimeoutExpired as e:
-        # Round-6 #15: also strip ANSI from stderr_plain. MCP
         # callers reading stderr would otherwise see raw `\x1b[...m`
         # escape codes embedded in error messages. Same symmetric
         # fix applies to the success-return path below.
-        #
-        # Round-7 #5: align `stderr` and `stderr_plain` so they
         # describe the same subprocess state, just with vs without
         # ANSI escapes. Pre-fix `stderr` was the synthetic timeout
         # message only, while `stderr_plain` preferred the captured
@@ -1038,7 +925,6 @@ def _run_zh(args: list[str], *, cwd: str | None = None,
         "stdout": result.stdout,
         "stderr": result.stderr,
         "stdout_plain": _ANSI_RE.sub("", result.stdout),
-        # Round-6 #15: symmetric ANSI strip on stderr — MCP callers
         # surfacing tool errors should see human-readable text, not
         # escape codes.
         "stderr_plain": _ANSI_RE.sub("", result.stderr),
@@ -1047,7 +933,6 @@ def _run_zh(args: list[str], *, cwd: str | None = None,
 
 def _parse_board(plain: str) -> dict:
     """Parse `zh board` plain output into {pipeline_name: count}."""
-    # Lines look like: "  Product Backlog            44 ██████████████…"
     # Bar can be any combination of block/space chars AND may end in `…` when
     # truncated to terminal width. Match name + count; ignore everything after.
     out = {}
@@ -1066,8 +951,6 @@ def _parse_board(plain: str) -> dict:
 def _parse_pipeline_listing(plain: str) -> list[dict]:
     """Parse `zh pipeline <name>` output into list of {number, repo, points, assignee, title}."""
     issues = []
-    # Pattern: "  #NNN │ owner/repo │ N pts │ assignee"
-    # Followed by indented title on next line(s)
     lines = plain.splitlines()
     i = 0
     while i < len(lines):
@@ -1080,7 +963,6 @@ def _parse_pipeline_listing(plain: str) -> list[dict]:
             repo = m.group(2)
             pts = m.group(3)
             assignee = m.group(4)
-            # Title is on the next indented non-empty line. Bail out
             # only when we see a real `#NNN │` header. Require the
             # candidate to actually start with whitespace so an
             # interstitial unindented banner (group header, gh warning,
@@ -1133,7 +1015,6 @@ def _parse_mine_listing(plain: str) -> list[dict]:
             number = int(m.group(1))
             repo = m.group(2)
             pipeline = m.group(3).strip()
-            # Title is the next indented non-empty non-arrow line. Bail
             # only on a real `#NNN │ ...` header (titles can start with
             # `#`), and require the candidate to start with whitespace
             # so an interstitial unindented banner can't be silently
@@ -1158,13 +1039,10 @@ def _parse_mine_listing(plain: str) -> list[dict]:
     return issues
 
 
-# Sub-issue helpers moved to zh_graphql_ops.py — the MCP server now talks
 # directly to ZenHub's GraphQL API for the sub-issue family of tools
-# (list / add / remove / reorder). The bash text contract used in v1.5.0
 # was a recurring source of drift; v1.6.0 retires it entirely.
 
 
-# v1.9.0 retired `_parse_new_issue_number` / `_parse_new_epic_number` and
 # their `_SUCCESS_*_RE` anchors. Every create path (issue + planning nouns)
 # now invokes `zh ... create --json`, which writes a clean JSON object to
 # stdout (human chatter goes to stderr); `_parse_create_json` below parses
@@ -1204,16 +1082,109 @@ def _parse_create_json(plain: str) -> dict | None:
     return None
 
 
-# =============================================================================
-# MCP server
-# =============================================================================
+_DUP_CHECK_SKIPPED = {"recommendation": "skipped", "matches": []}
+
+
+def _append_duplicate_create_flags(
+    args: list[str],
+    *,
+    confirm_create: bool,
+    skip_duplicate_check: bool,
+    related_issues: list[int] | None,
+) -> None:
+    if skip_duplicate_check:
+        args.append("--skip-duplicate-check")
+    if confirm_create:
+        args.append("--confirm-create")
+    if related_issues:
+        nums = [str(n) for n in related_issues if type(n) is int and n > 0]
+        if nums:
+            args.extend(["--related-issues", ",".join(nums)])
+
+
+def _blocked_create_response(dup_info: dict, *, base: dict) -> dict:
+    hard = dup_info.get("hard_threshold", 0.7)
+    return {
+        **base,
+        "ok": False,
+        "blocked": True,
+        "stderr": (
+            "Refused: a similar open issue already exists "
+            f"(cosine similarity >= {hard}). "
+            "Review duplicate_check.matches; if the new ticket is "
+            "genuinely distinct, retry with confirm_create=True."
+        ),
+        "duplicate_check": dup_info,
+    }
+
+
+def _finalize_create_from_zh(
+    r: dict,
+    *,
+    parent_requested: int | None,
+) -> dict:
+    """Map a `zh ... create --json` run into the MCP create response shape."""
+    parsed = _parse_create_json(r["stdout_plain"])
+    if parsed and parsed.get("blocked"):
+        dup_info = parsed.get("duplicate_check") or {}
+        return _blocked_create_response(
+            dup_info,
+            base={
+                "partial_applied": False,
+                "number": None,
+                "url": None,
+                "github_url": None,
+                "zenhub_url": None,
+                "type": None,
+                "pipeline": None,
+                "parent": None,
+                "estimate": None,
+                "estimate_requested": None,
+                "priority": None,
+                "priority_requested": None,
+                "raw": r["stdout_plain"],
+            },
+        )
+
+    created = parsed if (parsed and r["ok"]) else None
+    parent_wire_failed = (
+        r["ok"] and created is not None
+        and parent_requested is not None
+        and created.get("parent") != parent_requested
+    )
+    dup_info = created.get("duplicate_check") if created else (
+        parsed.get("duplicate_check") if parsed else None
+    )
+    gh_url = (created.get("github_url") or created.get("url")) if created else None
+    zh_url = created.get("zenhub_url") if created else None
+    return {
+        "ok": r["ok"] and created is not None,
+        "partial_applied": parent_wire_failed,
+        "number": created.get("number") if created else None,
+        "url": gh_url,
+        "github_url": gh_url,
+        "zenhub_url": zh_url,
+        "type": created.get("type") if created else None,
+        "pipeline": created.get("pipeline") if created else None,
+        "parent": created.get("parent") if created else None,
+        "estimate": created.get("estimate") if created else None,
+        "estimate_requested": (
+            created.get("estimate_requested") if created else None
+        ),
+        "priority": created.get("priority") if created else None,
+        "priority_requested": (
+            created.get("priority_requested") if created else None
+        ),
+        "raw": r["stdout_plain"],
+        "stderr": _stderr_plain(r),
+        "duplicate_check": dup_info if dup_info is not None else _DUP_CHECK_SKIPPED,
+    }
+
+
 
 mcp = FastMCP("zenhub")
 
 
-# -----------------------------------------------------------------------------
-# READ TOOLS (safe — no side effects)
-# -----------------------------------------------------------------------------
 
 @mcp.tool()
 def board(repo_path: str = "") -> dict:
@@ -1275,8 +1246,7 @@ def pipelines(repo_path: str = "") -> dict:
     if r["ok"]:
         for line in r["stdout_plain"].splitlines():
             stripped = line.strip()
-            # Skip headers and tips
-            if (stripped and not stripped.startswith("Info:")
+            if (stripped and not stripped.startswith(("Info:", "info:"))
                     and not stripped.startswith("Tip:")
                     and not stripped.startswith("Workspace:")
                     and not stripped.startswith("Pipelines:")
@@ -1293,6 +1263,10 @@ def pipelines(repo_path: str = "") -> dict:
 @mcp.tool()
 def issue(number: int, repo_path: str = "") -> dict:
     """Get full detail for a single issue.
+
+    Includes metadata (state, pipeline, priority, estimate, assignees,
+    labels, parent/children, URLs), the issue description (body), and
+    GitHub comments when `gh` is authenticated.
 
     Args:
         number: GitHub issue number.
@@ -1339,13 +1313,11 @@ def mine(user: str = "", repo_path: str = "") -> dict:
 
 @mcp.tool()
 def epic_list(repo_path: str = "") -> dict:
-    """List issues of type Epic in the workspace (v1.9.0 model).
-
+    """
     An epic is a normal issue whose ZenHub issue-type is Epic; this lists
     every such issue. The `number` is an ordinary GitHub issue number with
     a normal issue URL (the old ZenhubEpic id concept is gone).
 
-    v1.9.0 delegates to the generic `_planning_list` so initiative_list /
     project_list / subtask_list all behave identically. The response
     exposes BOTH the new noun-neutral `items` key AND a back-compat
     `epics` alias (deprecated) for callers pinned to the v1.8.x shape.
@@ -1368,7 +1340,6 @@ def epic_list(repo_path: str = "") -> dict:
 def epic_show(epic_number: int, repo_path: str = "") -> dict:
     """Show full detail for an epic issue (metadata + child issues).
 
-    v1.9.0: `epic_number` is an ordinary GitHub issue number (the issue
     whose type is Epic). Children are the issue's sub-issues.
 
     Args:
@@ -1427,7 +1398,6 @@ def list_labels(repo_path: str = "") -> dict:
 def list_types(repo_path: str = "") -> dict:
     """List the workspace's assignable issue types with level + disposition.
 
-    v1.9.0: backed by assignableIssueTypes, so this shows the full 5-level
     hierarchy (Initiative / Project / Epic at PLANNING_PANEL, plus Bug /
     Feature / Task / Sub-task at BOARD), each with its level (1-5),
     disposition, and source (ZenhubIssueType vs GithubIssueType). The old
@@ -1447,56 +1417,18 @@ def list_types(repo_path: str = "") -> dict:
     }
 
 
-# -----------------------------------------------------------------------------
-# SIMILARITY SEARCH TOOLS
-#
-# Sentence-embedding-backed search to surface tickets that look
-# semantically similar to a query string (or a proposed new title+body).
-# Catches paraphrased duplicates that keyword search misses.
-#
-# Cache lives at ~/.config/zh/index/<owner_repo>.pkl (durable across
-# reboots). Implementation is in similarity.py.
-# -----------------------------------------------------------------------------
+# SIMILARITY SEARCH TOOLS (shell out to `zh similar` / `zh reindex`)
 
 
-def _similarity_repo(repo_path: str) -> tuple[str | None, str | None]:
-    """Resolve which `owner/repo` similarity search should target.
-
-    Returns (repo, error_message). Exactly one will be non-None.
-    """
-    try:
-        # Lazy import: keeps the bootstrap path cheap if the tool is
-        # never invoked (sentence-transformers brings in torch).
-        from similarity import repo_from_cwd
-
-        return repo_from_cwd(_resolve_cwd(repo_path)), None
-    except Exception as e:
-        return None, _similarity_exc_to_stderr(e)
-
-
-def _similarity_exc_to_stderr(exc: Exception) -> str:
-    """Turn a similarity-path exception into an actionable message.
-
-    A `ModuleNotFoundError` / `ImportError` here means the MCP venv's
-    embedding dependencies (sentence-transformers / torch / numpy) are
-    missing or corrupted. The per-launch bootstrap probe only checks
-    the primary dep (`mcp`), so a partial-dep corruption between
-    launches isn't caught until the first similarity call. Rather than
-    surface a bare `No module named 'sentence_transformers'`, point the
-    caller at the one-line fix (delete the venv → next launch rebuilds).
-    """
-    if isinstance(exc, (ModuleNotFoundError, ImportError)):
-        try:
-            venv_hint = str(_default_venv_dir()[0])
-        except Exception:
-            venv_hint = "the MCP venv ($ZH_MCP_VENV / $XDG_DATA_HOME/zh/venv)"
-        return (
-            f"similarity dependencies unavailable in the MCP venv "
-            f"({exc}). The venv appears to have missing or corrupted "
-            f"embedding deps. Delete it and relaunch to trigger a clean "
-            f"rebuild: rm -rf {venv_hint}"
-        )
-    return str(exc)
+def _parse_zh_json_tool(r: dict, *, fallback: dict) -> dict:
+    """Parse JSON stdout from a `zh ... --json` invocation."""
+    parsed = _parse_create_json(r["stdout_plain"])
+    stderr = _stderr_plain(r)
+    if parsed is not None:
+        if "stderr" not in parsed:
+            parsed["stderr"] = stderr
+        return parsed
+    return {**fallback, "stderr": stderr or fallback.get("stderr", "command failed")}
 
 
 @mcp.tool()
@@ -1504,103 +1436,52 @@ def zh_similar(query: str, top_k: int = 5, threshold: float = 0.35,
                repo_path: str = "") -> dict:
     """Find issues semantically similar to a query string.
 
-    Uses sentence-transformer embeddings (all-MiniLM-L6-v2) over the
-    titles + body previews of every open issue in the repo. Catches
-    paraphrased duplicates that keyword search misses.
-
-    The cache auto-refreshes on a 5-minute TTL via GitHub's
-    `?since=<ISO8601>` filter — only changed issues get re-embedded.
-    First call after a wipe (or first call ever) triggers a full pull
-    and may take 30-60s depending on backlog size. No manual reindex
-    is needed; the sync is transparent on every call.
-
-    ALWAYS returns the top-K closest issues (never a bare empty list
-    when the repo has any open issues). Each match carries
-    `meets_threshold`: True when its score cleared `threshold`, False
-    when it's surfaced only as a closest-candidate. Use the top-level
-    `any_above_threshold` for a quick "was there a strong match?" read.
-
-    Tip: natural-language queries ("admin wizard dark-mode contrast
-    bug") embed more tightly than keyword salads ("contrast dark admin")
-    and score higher. The default threshold (0.35) is tuned for short
-    ad-hoc lookups.
+    Shells out to `zh similar --json` (sentence-transformer embeddings).
+    See `zh similar --help` for query tips and cache behavior.
 
     Args:
-        query: text to compare against existing issues. Free-form;
-            full sentences work better than disconnected keywords.
+        query: text to compare against existing issues.
         top_k: max results to return (default 5).
-        threshold: cosine similarity (0.0-1.0) at/above which a match is
-            flagged `meets_threshold=True` (default 0.35).
-        repo_path: Optional absolute path of a git checkout. Used to
-            derive `owner/repo` for the search.
+        threshold: cosine similarity (0.0-1.0) for `meets_threshold` (default 0.35).
+        repo_path: Optional absolute path of a git checkout to run zh from.
 
     Returns:
-        dict with: ok, repo, threshold, any_above_threshold, matches
-        (list of {number, repo, title, body_preview, state, similarity,
-        meets_threshold}), stderr.
+        dict with: ok, repo, threshold, any_above_threshold, matches, stderr.
     """
-    repo, err = _similarity_repo(repo_path)
-    if err:
-        return {"ok": False, "matches": [], "stderr": err}
-    try:
-        from similarity import find_similar
-
-        # min_results=top_k → always backfill to the closest top_k so the
-        # caller sees the nearest candidates (annotated) instead of [].
-        results = find_similar(
-            query, repo, top_k=top_k, threshold=threshold,
-            min_results=top_k, auto_sync=True,
-        )
-        return {
-            "ok": True,
-            "repo": repo,
-            "threshold": threshold,
-            "any_above_threshold": any(m.meets_threshold for m in results),
-            "matches": [m.to_dict() for m in results],
-            "stderr": "",
-        }
-    except Exception as e:
-        return {"ok": False, "repo": repo, "matches": [],
-                "stderr": _similarity_exc_to_stderr(e)}
+    args = [
+        "similar", query, "--json",
+        "--top-k", str(top_k),
+        "--threshold", str(threshold),
+    ]
+    r = _run_zh(args, cwd=_resolve_cwd(repo_path), timeout=180.0)
+    return _parse_zh_json_tool(
+        r,
+        fallback={"ok": False, "matches": [], "threshold": threshold},
+    )
 
 
 @mcp.tool()
 def zh_reindex(full: bool = False, repo_path: str = "") -> dict:
     """Refresh the similarity-search cache for this repo.
 
-    Most callers don't need this — `zh_similar` auto-syncs on a
-    5-minute TTL. Use this to force a refresh after a known external
-    change burst, or pass `full=True` to rebuild from scratch (useful
-    if the cache looks corrupted).
+    Shells out to `zh reindex --json`. Most callers don't need this —
+    `zh similar` auto-syncs on a 5-minute TTL.
 
     Args:
-        full: if True, drop the existing cache and pull every open
-            issue from scratch. Otherwise do a delta sync from the
-            cache's last indexed_at timestamp.
-        repo_path: Optional absolute path of a git checkout to derive
-            owner/repo from.
+        full: if True, rebuild the cache from scratch.
+        repo_path: Optional absolute path of a git checkout to run zh from.
 
     Returns:
-        dict with: ok, repo, mode ('full'/'delta'/'skipped'),
-        added, updated, removed, indexed_at, total_entries, stderr.
+        dict with: ok, repo, mode, added, updated, removed, indexed_at,
+        total_entries, stderr.
     """
-    repo, err = _similarity_repo(repo_path)
-    if err:
-        return {"ok": False, "stderr": err}
-    try:
-        from similarity import reindex
-
-        result = reindex(repo, full=full)
-        result["stderr"] = ""
-        return result
-    except Exception as e:
-        return {"ok": False, "repo": repo,
-                "stderr": _similarity_exc_to_stderr(e)}
+    args = ["reindex", "--json"]
+    if full:
+        args.append("--full")
+    r = _run_zh(args, cwd=_resolve_cwd(repo_path), timeout=300.0)
+    return _parse_zh_json_tool(r, fallback={"ok": False})
 
 
-# -----------------------------------------------------------------------------
-# WRITE TOOLS — ISSUE LIFECYCLE
-# -----------------------------------------------------------------------------
 
 @mcp.tool()
 def create_issue(title: str, body: str, type: str = "Task",
@@ -1619,7 +1500,6 @@ def create_issue(title: str, body: str, type: str = "Task",
     returned. Pass `confirm_create=True` to override and create
     anyway. Soft matches are surfaced as a warning but don't block.
 
-    v1.9.0: `type` is resolved via assignableIssueTypes, so any
     configured type works (Bug / Feature / Task at board level, plus
     the planning-panel types Initiative / Project / Epic and Sub-task).
     A type name that is not assignable in the workspace is now a hard
@@ -1638,7 +1518,6 @@ def create_issue(title: str, body: str, type: str = "Task",
             reads).
         priority: Optional priority name (resolved case-insensitively
             against the workspace's configured priorities; discover
-            names with list_priorities). Round-6 finding #6: same
             surface the bash `--priority` flag exposes. When set, the
             response carries `priority_requested` mirroring the input
             and `priority` reflecting the post-create mutation
@@ -1665,38 +1544,25 @@ def create_issue(title: str, body: str, type: str = "Task",
             candidate matches and recommendation), and a clear message
             explaining how to override.
         On success: dict with ok=True, partial_applied, number (new issue
-            number), url, type, pipeline, parent, estimate,
+            number), url / github_url (GitHub), zenhub_url (ZenHub board),
+            type, pipeline, parent, estimate,
             estimate_requested, priority, priority_requested, raw, stderr,
             duplicate_check (informational; may include soft matches).
             partial_applied is True when the issue was created but never
             wired under the requested parent (addSubIssues failed) — a
-            parent-wire failure, not a clean success. v1.9.2 round-7
-            finding #3: `estimate_requested` mirrors the priority
-            request/applied split. Compare it against `estimate`:
+            parent-wire failure, not a clean success. `estimate_requested`
+            mirrors the priority request/applied split. Compare it against `estimate`:
             null/null = not requested, N/N = applied, N/null =
             requested but the setEstimate mutation did not confirm
             (retry, do NOT assume it landed).
     """
-    # v1.9.2 round-2 (PR #27) finding #2: validation early returns
-    # must match the full documented key set so clients reading
-    # out["number"] / out["raw"] / out["estimate_requested"] / etc.
-    # per the docstring contract do not KeyError on a bad-input call.
-    # Same shape-drift family as round-7 #8 / #11 (which fixed
-    # set_issue_type and _planning_update); the create_issue sibling
-    # validation paths were left at the old 2-key shape.
     _empty_create_shape = {
         "ok": False,
-        # v1.9.4 finding #1: include partial_applied in
-        # the shared validation shape so create_issue parses the same
-        # `out["partial_applied"]` key as every other write wrapper.
-        # cmd_create has no exit-2 partial today (the parent-wire
-        # addSubIssues failure is reported separately as `parent=null`,
-        # not as a partial-applied state), so this is always False.
-        # Agents that uniformly read out["partial_applied"] on every
-        # write tool no longer KeyError on a create.
         "partial_applied": False,
         "number": None,
         "url": None,
+        "github_url": None,
+        "zenhub_url": None,
         "type": None,
         "pipeline": None,
         "parent": None,
@@ -1706,13 +1572,6 @@ def create_issue(title: str, body: str, type: str = "Task",
         "priority_requested": None,
         "raw": "",
     }
-    # v1.9.3 pattern-sweep finding #5: shape-drift parity. The blocked
-    # / success / soft-warn paths all include `duplicate_check`; the
-    # validation early-returns omitted it, so a strict client reading
-    # `out["duplicate_check"]` on every response KeyErrored on
-    # title-empty / body-empty input. Add a `recommendation="skipped"`
-    # placeholder for back-compat parity with the round-4 #9 fix in the
-    # main path.
     _validation_dup_placeholder = {"recommendation": "skipped", "matches": []}
     if not title.strip():
         return {**_empty_create_shape,
@@ -1723,72 +1582,6 @@ def create_issue(title: str, body: str, type: str = "Task",
                 "stderr": "body must be non-empty",
                 "duplicate_check": _validation_dup_placeholder}
 
-    # Pre-flight similarity check
-    dup_info = None
-    if not skip_duplicate_check:
-        repo, err = _similarity_repo(repo_path)
-        if err:
-            # Can't derive repo → log but don't fail the create.
-            dup_info = {"ok": False, "stderr": err, "matches": []}
-        else:
-            try:
-                from similarity import check_duplicate
-
-                # Issue #46: forward the intended parent (and any caller-
-                # declared sibling relatives) so a hard match against a
-                # structural relative is downgraded to a warning instead
-                # of hard-blocking the addSubIssues wiring.
-                dup_info = check_duplicate(
-                    title, body, repo,
-                    parent=parent if parent else None,
-                    related_issues=related_issues,
-                )
-            except Exception as e:
-                # Embedding failure shouldn't block create — log only,
-                # with an actionable hint if the venv deps are corrupt.
-                dup_info = {
-                    "ok": False,
-                    "stderr": (
-                        "duplicate check failed: "
-                        + _similarity_exc_to_stderr(e)
-                    ),
-                    "matches": [],
-                }
-
-        if (dup_info and dup_info.get("recommendation") == "block"
-                and not confirm_create):
-            # v1.9.2 round-7 finding #7: full key-set on the blocked
-            # path so create_issue and the planning-noun creates
-            # behave the same way for clients reading documented keys
-            # like out["number"], out["estimate_requested"], etc.
-            return {
-                "ok": False,
-                # v1.9.4 finding #1: uniform-key parity.
-                "partial_applied": False,
-                "blocked": True,
-                "number": None,
-                "url": None,
-                "type": None,
-                "pipeline": None,
-                "parent": None,
-                "estimate": None,
-                "estimate_requested": None,
-                "priority": None,
-                "priority_requested": None,
-                "raw": "",
-                "stderr": (
-                    "Refused: a similar open issue already exists "
-                    "(cosine similarity >= "
-                    f"{dup_info.get('hard_threshold')}). "
-                    "Review duplicate_check.matches; if the new ticket is "
-                    "genuinely distinct, retry with confirm_create=True."
-                ),
-                "duplicate_check": dup_info,
-            }
-
-    # v1.9.0: use --json so the new number is parsed from a clean JSON
-    # object on stdout rather than scraped from a colorized success line
-    # (the parse-miss that motivated G2).
     args = ["create", title, "-t", type, "-p", pipeline, "-b", body, "--json"]
     if labels:
         args.extend(["-l", labels])
@@ -1796,65 +1589,21 @@ def create_issue(title: str, body: str, type: str = "Task",
         args.extend(["--parent", str(parent)])
     if priority:
         args.extend(["--priority", priority])
-    r = _run_zh(args, cwd=_resolve_cwd(repo_path))
-
-    # Round-6 finding #6: shape parity with _planning_create. The bash
-    # --json emit carries priority / priority_requested / estimate;
-    # propagate them all so MCP clients reading either create surface
-    # see the same key set.
-    created = _parse_create_json(r["stdout_plain"]) if r["ok"] else None
-    # v1.9.4 round-2 finding #2: cmd_create reports parent-wire
-    # (addSubIssues) failure as `parent=null` in the JSON, not as an
-    # exit-2 partial signal. Detect the requested-vs-actual divergence
-    # and surface it as partial_applied=True so agents reading the
-    # uniform partial_applied key across write tools see the same
-    # retry-gating signal for create that they get for the children
-    # wrappers and set_issue_type.
-    parent_requested = parent if parent and parent > 0 else None
-    actual_parent = created.get("parent") if created else None
-    parent_wire_failed = (
-        r["ok"] and created is not None
-        and parent_requested is not None
-        and actual_parent != parent_requested
+    _append_duplicate_create_flags(
+        args,
+        confirm_create=confirm_create,
+        skip_duplicate_check=skip_duplicate_check,
+        related_issues=related_issues,
     )
-    out = {
-        "ok": r["ok"] and created is not None,
-        "partial_applied": parent_wire_failed,
-        "number": created.get("number") if created else None,
-        "url": created.get("url") if created else None,
-        "type": created.get("type") if created else None,
-        "pipeline": created.get("pipeline") if created else None,
-        "parent": created.get("parent") if created else None,
-        "estimate": created.get("estimate") if created else None,
-        # v1.9.2 round-7 finding #3: bash --json emits the three-state
-        # estimate split (estimate / estimate_requested). Propagate the
-        # `_requested` half so MCP callers can detect a setEstimate
-        # mutation that lost the value (estimate=null, requested=N).
-        "estimate_requested": (
-            created.get("estimate_requested") if created else None
-        ),
-        "priority": created.get("priority") if created else None,
-        "priority_requested": (
-            created.get("priority_requested") if created else None
-        ),
-        "raw": r["stdout_plain"],
-        "stderr": _stderr_plain(r),
-    }
-    # v1.9.2 round-4 (PR #27) finding #9: always set duplicate_check
-    # so clients reading it per the docstring contract don't KeyError
-    # on a skip_duplicate_check=True call (or a repo-resolution
-    # failure that left dup_info as None).
-    if dup_info is not None:
-        out["duplicate_check"] = dup_info
-    else:
-        out["duplicate_check"] = {"recommendation": "skipped",
-                                  "matches": []}
-    return out
+    r = _run_zh(args, cwd=_resolve_cwd(repo_path))
+    parent_requested = parent if parent and parent > 0 else None
+    return _finalize_create_from_zh(r, parent_requested=parent_requested)
 
 
 @mcp.tool()
-def close_issue(number: int, comment: str = "", repo_path: str = "") -> dict:
-    """Close an issue (moves to Closed pipeline) with an optional closing comment.
+def close_issue(number: int, comment: str = "", reason: str = "",
+                duplicate_of: int = 0, repo_path: str = "") -> dict:
+    """Close an issue (moves to Closed pipeline) with optional reason/comment.
 
     DESTRUCTIVE — sends notifications to issue watchers. Pre-confirm before
     invoking on tickets you don't own.
@@ -1862,25 +1611,28 @@ def close_issue(number: int, comment: str = "", repo_path: str = "") -> dict:
     Args:
         number: Issue number to close.
         comment: Optional closing comment (recommended — explain WHY).
+        reason: Optional GitHub close reason: "completed", "not planned",
+            or "duplicate". Empty keeps GitHub's default (completed).
+        duplicate_of: When reason is "duplicate", the issue number this
+            duplicates. Ignored otherwise. Pass 0 to omit.
         repo_path: Optional absolute path of a git checkout to run zh from.
 
     Returns:
-        dict with: ok, partial_applied, number, raw, stderr.
+        dict with: ok, partial_applied, number, reason, raw, stderr.
     """
     args = ["close", str(number)]
+    if reason:
+        args.extend(["--reason", reason])
+    if duplicate_of:
+        args.extend(["--duplicate-of", str(duplicate_of)])
     if comment:
-        args.append(comment)
+        args.extend(["--comment", comment])
     r = _run_zh(args, cwd=_resolve_cwd(repo_path))
-    # v1.9.3 pattern-sweep: include `partial_applied` for uniform-key
-    # parity with set_issue_type and the planning-children wrappers.
-    # cmd_close uses `gh` and has no exit-2 partial today, so the field
-    # is always False here — but agents that uniformly read
-    # out["partial_applied"] on every write tool should not KeyError on
-    # a close. Mirrors the round-3 #8 add for _planning_close.
     return {
         "ok": r["ok"],
         "partial_applied": False,
         "number": number,
+        "reason": reason or None,
         "raw": r["stdout_plain"],
         "stderr": _stderr_plain(r),
     }
@@ -1898,7 +1650,6 @@ def reopen_issue(number: int, repo_path: str = "") -> dict:
         dict with: ok, partial_applied, number, raw, stderr.
     """
     r = _run_zh(["reopen", str(number)], cwd=_resolve_cwd(repo_path))
-    # v1.9.3 pattern-sweep: uniform-key parity (see close_issue comment).
     return {
         "ok": r["ok"],
         "partial_applied": False,
@@ -1921,7 +1672,6 @@ def move_issue(number: int, pipeline: str, repo_path: str = "") -> dict:
         dict with: ok, partial_applied, number, target_pipeline, raw, stderr.
     """
     r = _run_zh(["move", str(number), pipeline], cwd=_resolve_cwd(repo_path))
-    # v1.9.3 pattern-sweep: uniform-key parity (see close_issue comment).
     return {
         "ok": r["ok"],
         "partial_applied": False,
@@ -1946,7 +1696,6 @@ def reorder_issue(number: int, position: str, repo_path: str = "") -> dict:
     """
     r = _run_zh(["reorder", str(number), position],
                 cwd=_resolve_cwd(repo_path))
-    # v1.9.3 pattern-sweep: uniform-key parity (see close_issue comment).
     return {
         "ok": r["ok"],
         "partial_applied": False,
@@ -1970,22 +1719,51 @@ def comment(number: int, message: str, repo_path: str = "") -> dict:
         dict with: ok, partial_applied, number, raw, stderr.
     """
     if not message.strip():
-        # v1.9.2 round-3 (PR #27) finding #1: validation early-return
-        # must match the success-path key set (number, raw, stderr)
-        # so clients reading out["number"] / out["raw"] per the
-        # docstring do not KeyError on a bad-input call. Same drift
-        # family the PR closed for create_issue (round-2 #2),
-        # _planning_create (round-2 #3), _planning_update (round-7
-        # #11), and set_issue_type (round-7 #8). `comment()` was the
-        # surviving sibling.
-        # v1.9.3 pattern-sweep: include partial_applied for uniform-key
-        # parity with the success path.
         return {"ok": False, "partial_applied": False,
                 "number": number, "raw": "",
                 "stderr": "message must be non-empty"}
     r = _run_zh(["comment", str(number), "-m", message],
                 cwd=_resolve_cwd(repo_path))
-    # v1.9.3 pattern-sweep: uniform-key parity (see close_issue comment).
+    return {
+        "ok": r["ok"],
+        "partial_applied": False,
+        "number": number,
+        "raw": r["stdout_plain"],
+        "stderr": _stderr_plain(r),
+    }
+
+
+@mcp.tool()
+def edit_issue(number: int, title: str = "", description: str = "",
+               repo_path: str = "") -> dict:
+    """Edit an issue's title and/or description (non-interactive).
+
+    Opens no editor — pass title and/or description explicitly. For
+    interactive $EDITOR editing use the CLI: `zh edit <number>`.
+
+    Args:
+        number: Issue number.
+        title: New title (omit / empty to leave unchanged).
+        description: New body (omit / empty to leave unchanged).
+        repo_path: Optional absolute path of a git checkout to run zh from.
+
+    Returns:
+        dict with: ok, partial_applied, number, raw, stderr.
+    """
+    if not title and not description:
+        return {
+            "ok": False,
+            "partial_applied": False,
+            "number": number,
+            "raw": "",
+            "stderr": "Must provide title and/or description",
+        }
+    args = ["edit", str(number)]
+    if title:
+        args.extend(["-t", title])
+    if description:
+        args.extend(["-d", description])
+    r = _run_zh(args, cwd=_resolve_cwd(repo_path))
     return {
         "ok": r["ok"],
         "partial_applied": False,
@@ -2026,7 +1804,6 @@ def assign(number: int, assignees: list[str] | None = None, user: str = "",
             "stderr": "No assignee specified: pass assignees=[\"user\", ...] (or user=\"user\").",
         }
     r = _run_zh(["assign", str(number), *targets], cwd=_resolve_cwd(repo_path))
-    # v1.9.3 pattern-sweep: uniform-key parity (see close_issue comment).
     return {
         "ok": r["ok"],
         "partial_applied": False,
@@ -2079,7 +1856,6 @@ def unassign(number: int, assignees: list[str] | None = None,
     else:
         args.extend(targets)
     r = _run_zh(args, cwd=_resolve_cwd(repo_path))
-    # v1.9.3 pattern-sweep: uniform-key parity (see close_issue comment).
     return {
         "ok": r["ok"],
         "partial_applied": False,
@@ -2105,7 +1881,6 @@ def set_estimate(number: int, points: str, repo_path: str = "") -> dict:
     """
     r = _run_zh(["estimate", str(number), points],
                 cwd=_resolve_cwd(repo_path))
-    # v1.9.3 pattern-sweep: uniform-key parity (see close_issue comment).
     return {
         "ok": r["ok"],
         "partial_applied": False,
@@ -2120,7 +1895,6 @@ def set_estimate(number: int, points: str, repo_path: str = "") -> dict:
 def set_priority(number: int, level: str, repo_path: str = "") -> dict:
     """Set or clear an issue's priority by name.
 
-    v1.9.0 (G1): priorities are workspace-defined, not a fixed
     high/medium/low set. `level` is matched case-insensitively against
     the workspace's configured priority names; pass "clear" to remove.
     Discover the configured names with list_priorities. If no priority
@@ -2138,7 +1912,6 @@ def set_priority(number: int, level: str, repo_path: str = "") -> dict:
     """
     r = _run_zh(["priority", str(number), level],
                 cwd=_resolve_cwd(repo_path))
-    # v1.9.3 pattern-sweep: uniform-key parity (see close_issue comment).
     return {
         "ok": r["ok"],
         "partial_applied": False,
@@ -2172,13 +1945,10 @@ def list_priorities(repo_path: str = "") -> dict:
 
 @mcp.tool()
 def set_issue_type(number: int, issue_type: str, repo_path: str = "") -> dict:
-    """Change an existing issue's type (G8).
+    """Change an existing issue's type.
 
-    v1.9.0: wraps changeIssueTypeOfIssues, which accepts the unified type
-    id for both GithubIssueType and ZenhubIssueType, so this can promote a
-    board issue to a planning-panel Epic (or any configured type) and back.
-    The type name is resolved via assignableIssueTypes (discover with
-    list_types); an unknown type fails with the available names in stderr.
+    Wraps changeIssueTypeOfIssues; accepts any assignable type (discover with
+    list_types). Unknown types fail with available names in stderr.
 
     Args:
         number: Issue number to retype.
@@ -2187,45 +1957,17 @@ def set_issue_type(number: int, issue_type: str, repo_path: str = "") -> dict:
 
     Returns:
         dict with: ok, partial_applied, number, issue_type, raw, stderr.
-
-        v1.9.2 round-2 #6 (compat note): `ok` is True when EITHER the
-        underlying call succeeded cleanly OR the partial-applied path
-        fired. This is a semantic flip from v1.9.1 (which surfaced
-        the partial as `ok=False`). Callers that branch ONLY on `ok`
-        miss the partial signal and skip re-verification of an
-        operation whose follow-on errors should be inspected before
-        the next mutation. Correct idiom from v1.9.2 on:
-            if r["partial_applied"]: re-verify with zh issue <number>
-            elif r["ok"]: trust the type change
-            else: hard failure, safe to retry
-        Same shape as the planning-children wrappers (round-7 #10).
-
-        v1.9.2 round-7 finding #9: `partial_applied` is True when the
-        underlying `zh type` exited 2 (round-6 #4 convention: ZenHub
-        side accepted the change but the mutation reported follow-on
-        errors). Agents that retry on ok=False MUST branch on
-        partial_applied — a retry of a partial-applied change runs a
-        second mutation against an issue whose type already changed,
-        which can no-op or fail in confusing ways. Re-verify the
-        type with `zh issue N` before deciding.
+        `ok` is True on clean success or partial apply; branch on
+        partial_applied before retrying. Exit code 2 means the type change
+        landed but follow-on errors were reported — re-verify with zh issue N.
     """
     if not issue_type.strip():
-        # v1.9.2 round-7 finding #8: validation early-return must
-        # include partial_applied so clients that uniformly key-check
-        # `out["partial_applied"]` do not KeyError.
         return {"ok": False, "partial_applied": False,
                 "number": number, "issue_type": issue_type,
                 "raw": "", "stderr": "issue_type must be non-empty"}
     r = _run_zh(["type", str(number), issue_type],
                 cwd=_resolve_cwd(repo_path))
-    # Round-6 finding #4: surface the exit-code convention. The bash
-    # cmd_set_type uses exit 2 for the divergence-only partial case
-    # (ZenHub side accepted the type change but the mutation also
-    # reported a GitHub-side error or a populated failedIssues). For
-    # MCP callers the distinction matters: a true failure (exit 1) is
-    # safe to retry, but a partial apply (exit 2) means the change
-    # already landed and a retry would be wasted (or hit a no-op
-    # error). Expose `partial_applied: True` so an agent can branch.
+    # exit 2: type change landed but mutation reported follow-on errors
     partial_applied = _safe_int(r.get("exit_code")) == 2
     return {
         "ok": r["ok"] or partial_applied,
@@ -2237,9 +1979,6 @@ def set_issue_type(number: int, issue_type: str, repo_path: str = "") -> dict:
     }
 
 
-# -----------------------------------------------------------------------------
-# WRITE TOOLS — DEPENDENCIES
-# -----------------------------------------------------------------------------
 
 @mcp.tool()
 def block_issue(blocked: int, blocking: int, repo_path: str = "") -> dict:
@@ -2255,7 +1994,6 @@ def block_issue(blocked: int, blocking: int, repo_path: str = "") -> dict:
     """
     r = _run_zh(["block", str(blocked), str(blocking)],
                 cwd=_resolve_cwd(repo_path))
-    # v1.9.3 pattern-sweep: uniform-key parity (see close_issue comment).
     return {
         "ok": r["ok"],
         "partial_applied": False,
@@ -2266,17 +2004,12 @@ def block_issue(blocked: int, blocking: int, repo_path: str = "") -> dict:
     }
 
 
-# -----------------------------------------------------------------------------
-# WRITE TOOLS: PLANNING HIERARCHY (issue-type + sub-issue model, v1.9.0)
-#
-# Each planning level (initiative / project / epic / subtask) is the SAME
 # machinery parameterised by a ZenHub issue-type name. The private _planning_*
 # helpers shell to the matching `zh <noun>` subcommand; the public @mcp.tool()
 # functions are thin per-noun wrappers, mirroring the data-driven bash design.
 # An "epic" is a normal issue whose issue-type is Epic; children are wired with
 # Sub-Issues, so create/add/show/etc. all act on real issue numbers and normal
 # issue URLs. The dead ZenhubEpic API the old epic_* tools targeted is gone.
-# -----------------------------------------------------------------------------
 
 
 def _planning_create(noun: str, title: str, description: str, labels: str,
@@ -2290,7 +2023,6 @@ def _planning_create(noun: str, title: str, description: str, labels: str,
 
     Forwards every meaningful create-time flag the bash side exposes:
     description, labels, pipeline, assignee, estimate, parent. The
-    duplicate-check pre-flight mirrors create_issue (v1.9.1 item #5):
     every planning-noun create now runs the same similarity guard, so
     an agent calling `epic_create("Auth redesign")` gets blocked on a
     near-duplicate the same way `create_issue(..., type="Epic")` would.
@@ -2312,28 +2044,25 @@ def _planning_create(noun: str, title: str, description: str, labels: str,
         priority: optional priority name, resolved case-insensitively
             against the workspace's configured priorities (discover with
             list_priorities), applied inline at create time exactly as
-            create_issue's `priority` does (v1.9.9 / #61). The response
+            create_issue's `priority` does . The response
             carries priority_requested (the input) and priority (the
             confirmed value); priority_requested=<name> with priority=null
             means the mutation did not confirm (retry) — this does NOT
             flip partial_applied, which stays the parent-wire signal.
     """
     if not title.strip():
-        # v1.9.2 round-2 (PR #27) finding #3: full key-set so the
         # validation path matches the success / blocked-path shape.
         # Missing keys (estimate_requested, priority,
         # priority_requested, raw) were the same drift class as
-        # the round-2 #2 fix for create_issue.
-        # v1.9.3 pattern-sweep finding #5: include `duplicate_check`
         # placeholder. The blocked and success paths emit it
-        # (round-4 #9 main-path fix); the validation early-return is
         # the sibling site that was missed.
         return {
             "ok": False,
-            # v1.9.4 finding #1: uniform-key parity.
             "partial_applied": False,
             "number": None,
             "url": None,
+            "github_url": None,
+            "zenhub_url": None,
             "type": None,
             "pipeline": None,
             "parent": None,
@@ -2345,92 +2074,6 @@ def _planning_create(noun: str, title: str, description: str, labels: str,
             "stderr": "title must be non-empty",
             "duplicate_check": {"recommendation": "skipped", "matches": []},
         }
-
-    # v1.9.1 item #5: pre-flight similarity check, identical machinery
-    # to create_issue. Same shape: a "block" recommendation
-    # short-circuits the create with the candidate matches; "warn" only
-    # annotates the response. Embedding failures or missing index fall
-    # through to create rather than blocking, so a transient infra
-    # problem cannot become a planning-noun outage.
-    #
-    # Round-3 finding #8: the two entry points differ on input
-    # validation. create_issue requires a non-empty body, so its
-    # embedding always sees both title and body. _planning_create
-    # accepts an empty description (planning items are often title-
-    # only). At the SOFT/HARD threshold boundary the same title can
-    # therefore land on different sides of the gate from the two
-    # surfaces. Equalizing this would mean either tightening
-    # _planning_create (hurts UX for legitimate title-only initiatives
-    # / epics) or relaxing create_issue (lowers a useful hint). The
-    # tradeoff is documented here so a future maintainer sees the
-    # asymmetry rather than treating it as a bug; agents that need
-    # identical scoring across surfaces should always pass description.
-    dup_info = None
-    if not skip_duplicate_check:
-        repo, err = _similarity_repo(repo_path)
-        if err:
-            dup_info = {"ok": False, "stderr": err, "matches": []}
-        else:
-            try:
-                from similarity import check_duplicate
-
-                # Issue #46: same structural-relative downgrade as
-                # create_issue, so e.g. an Epic created under a Project
-                # whose body enumerates its Epics is not hard-blocked.
-                dup_info = check_duplicate(
-                    title, description, repo,
-                    parent=parent if parent else None,
-                    related_issues=related_issues,
-                )
-            except Exception as e:
-                dup_info = {
-                    "ok": False,
-                    "stderr": (
-                        "duplicate check failed: "
-                        + _similarity_exc_to_stderr(e)
-                    ),
-                    "matches": [],
-                }
-
-        if (dup_info and dup_info.get("recommendation") == "block"
-                and not confirm_create):
-            # v1.9.2 round-7 finding #7: the round-2 #6 fix dropped
-            # this branch to a 4-key shape (ok / blocked / stderr /
-            # duplicate_check). That worked for clients that only
-            # read create_issue's blocked path (whose docstring is
-            # explicit about the truncation), but the planning-noun
-            # docstrings list the full 10-key contract. Agents
-            # reading `out["number"]` per the documented shape would
-            # KeyError on a blocked initiative_create / project_create
-            # / subtask_create. epic_create was partly insulated by
-            # _with_epic_number_alias setting `epic_number=None`, but
-            # only that one key was patched; the others stayed
-            # missing. Restore the full shape with None placeholders
-            # so every documented key is present.
-            return {
-                "ok": False,
-                # v1.9.4 finding #1: uniform-key parity.
-                "partial_applied": False,
-                "blocked": True,
-                "number": None,
-                "url": None,
-                "type": None,
-                "pipeline": None,
-                "parent": None,
-                "estimate": None,
-                "estimate_requested": None,
-                "priority": None,
-                "priority_requested": None,
-                "raw": "",
-                "stderr": (
-                    "Refused: a similar open issue already exists "
-                    "(cosine similarity >= "
-                    f"{dup_info.get('hard_threshold')}). "
-                    "Review duplicate_check.matches; if the new ticket is "
-                    "genuinely distinct, retry with confirm_create=True."
-                ),
-                "duplicate_check": dup_info,
-            }
 
     args = [noun, "create", title, "--json"]
     if description:
@@ -2445,80 +2088,17 @@ def _planning_create(noun: str, title: str, description: str, labels: str,
         args.extend(["-e", estimate])
     if parent and parent > 0:
         args.extend(["--parent", str(parent)])
-    # v1.9.9 (#61): forward --priority to the bash noun-create (which
-    # already accepts it and delegates to cmd_create's post-create
-    # priority step), mirroring create_issue. The --json output carries
-    # priority / priority_requested with the same three-state divergence
-    # contract, so a priority that didn't confirm surfaces as
-    # priority=null / priority_requested=<name> — no partial_applied flip
-    # (that stays the parent-wire signal, matching create_issue).
     if priority:
         args.extend(["--priority", priority])
-    r = _run_zh(args, cwd=_resolve_cwd(repo_path))
-    created = _parse_create_json(r["stdout_plain"]) if r["ok"] else None
-    # v1.9.8 (#54): mirror create_issue's parent-wire-failure detection.
-    # cmd_create reports an addSubIssues failure as parent=null in the JSON
-    # (the issue was created but never wired under its parent). Detect the
-    # requested-vs-actual divergence and surface it as partial_applied=True
-    # so the planning-noun creates honor the same uniform partial_applied
-    # contract as create_issue / the children wrappers — and so the
-    # structured-plan bulk-load guard (agents/zenhub.md) that skips
-    # orphaned creates works through epic_create / project_create / etc.,
-    # not just create_issue.
-    parent_requested = parent if parent and parent > 0 else None
-    actual_parent = created.get("parent") if created else None
-    parent_wire_failed = (
-        r["ok"] and created is not None
-        and parent_requested is not None
-        and actual_parent != parent_requested
+    _append_duplicate_create_flags(
+        args,
+        confirm_create=confirm_create,
+        skip_duplicate_check=skip_duplicate_check,
+        related_issues=related_issues,
     )
-    out = {
-        "ok": r["ok"] and created is not None,
-        "partial_applied": parent_wire_failed,
-        "number": created.get("number") if created else None,
-        "url": created.get("url") if created else None,
-        "type": created.get("type") if created else None,
-        "pipeline": created.get("pipeline") if created else None,
-        "parent": created.get("parent") if created else None,
-        "estimate": created.get("estimate") if created else None,
-        # v1.9.2 round-7 finding #4: mirror create_issue's
-        # estimate_requested propagation so epic_create /
-        # initiative_create / project_create / subtask_create all
-        # expose the three-state estimate signal. Without this an
-        # agent calling `epic_create(estimate="5")` against a
-        # transient setEstimate failure sees estimate=null with no
-        # way to tell "didn't ask" from "asked but lost".
-        "estimate_requested": (
-            created.get("estimate_requested") if created else None
-        ),
-        # Round-4 finding #7 + v1.9.9 (#61): propagate the priority fields
-        # so the planning-noun create returns the same key set create_issue
-        # does. As of v1.9.9 the planning creates accept `priority` inline
-        # (forwarded as --priority above), so these reflect the requested
-        # vs confirmed value with the same three-state contract as
-        # estimate: priority_requested=<name> / priority=null means the
-        # priority mutation didn't confirm (retry).
-        "priority": created.get("priority") if created else None,
-        "priority_requested": (
-            created.get("priority_requested") if created else None
-        ),
-        "raw": r["stdout_plain"],
-        "stderr": _stderr_plain(r),
-    }
-    # v1.9.2 round-4 (PR #27) finding #9: always set the key. When the
-    # pre-flight ran, `dup_info` carries the recommendation + matches.
-    # When `skip_duplicate_check=True` (or the repo couldn't be
-    # resolved and dup_info is None), use a placeholder marker so
-    # clients reading `out["duplicate_check"]` per the documented
-    # contract do not KeyError. The placeholder uses
-    # recommendation="skipped" so an agent can distinguish "we
-    # asked but it was bypassed" from a real match-or-skip outcome.
-    if dup_info is not None:
-        out["duplicate_check"] = dup_info
-    else:
-        out["duplicate_check"] = {"recommendation": "skipped",
-                                  "matches": []}
-    return out
+    r = _run_zh(args, cwd=_resolve_cwd(repo_path))
+    parent_requested = parent if parent and parent > 0 else None
+    return _finalize_create_from_zh(r, parent_requested=parent_requested)
 
 
 def _planning_list(noun: str, repo_path: str) -> dict:
@@ -2555,17 +2135,6 @@ def _planning_show(noun: str, number: int, repo_path: str) -> dict:
 def _planning_update(noun: str, number: int, title: str, description: str,
                      repo_path: str) -> dict:
     if not title and not description:
-        # v1.9.2 round-7 finding #11: validation early-return must
-        # match the success-path shape so clients reading out["raw"]
-        # per the docstring (epic_update / initiative_update / ...)
-        # do not KeyError. Same shape-drift family as F8/F9.
-        #
-        # v1.9.2 round-4 (PR #27) finding #3: include partial_applied
-        # for uniform-key parity with set_issue_type and
-        # _planning_close / _planning_reopen. Round-3 #8 added the
-        # field to close/reopen; the sibling update verb was missed.
-        # zh's update path uses `gh issue edit` and has no exit-2
-        # partial signal today, so this is always False here.
         return {"ok": False,
                 "partial_applied": False,
                 "stderr": "Must provide title and/or description",
@@ -2577,8 +2146,6 @@ def _planning_update(noun: str, number: int, title: str, description: str,
     if description:
         args.extend(["-d", description])
     r = _run_zh(args, cwd=_resolve_cwd(repo_path))
-    # v1.9.2 round-4 (PR #27) finding #3: same partial_applied shape
-    # parity for the success path.
     return {
         "ok": r["ok"],
         "partial_applied": False,
@@ -2595,24 +2162,19 @@ _OUTCOME_SENTINEL_RE = re.compile(
 # Values the bash sentinel may carry. Validated in _parse_outcome_sentinel.
 _SENTINEL_OUTCOMES = frozenset({"ok", "noop", "partial", "fail"})
 # Public surface — every outcome string a caller may observe in the
-# returned dict. Wrappers SYNTHESIZE "ok_unverified" when bash exits
+# returned dict. Wrappers synthesize "ok_unverified" when bash exits
 # cleanly but the sentinel is absent (mixed-version install); callers
 # writing invariant checks (`assert out["outcome"] in _OUTCOMES`)
 # should use this superset, not _SENTINEL_OUTCOMES.
 _OUTCOMES = _SENTINEL_OUTCOMES | frozenset({"ok_unverified"})
-# Back-compat alias for any importer of the original name.
 _KNOWN_OUTCOMES = _OUTCOMES
 
 
 def _stderr_plain(r: dict) -> str:
     """Return ANSI-stripped stderr from a `_run_zh` result.
 
-    v1.9.3 pattern-sweep: MCP wrappers should never surface raw `stderr`
-    with embedded ANSI escapes; `_run_zh` already computes
-    `stderr_plain`. This indirection lets stubbed test results (which
-    may carry only `stderr`) fall back to the raw value rather than
-    KeyError, so the swap stays back-compat for unit tests that
-    pre-date the field.
+    Prefers `stderr_plain` when present; falls back to raw `stderr` for
+    stubbed test results that pre-date the field.
     """
     if "stderr_plain" in r and r["stderr_plain"] is not None:
         return r["stderr_plain"]
@@ -2620,26 +2182,11 @@ def _stderr_plain(r: dict) -> str:
 
 
 def _parse_outcome_sentinel(stderr_plain: str) -> str | None:
-    """Extract the bash-emitted outcome sentinel from stderr.
+    """Extract the bash-emitted `__ZH_OUTCOME__:<outcome>` sentinel from stderr.
 
-    v1.9.3 pattern-sweep: `cmd_subissue_add` and `cmd_subissue_remove`
-    print `__ZH_OUTCOME__:<outcome>` to stderr exactly once before exiting,
-    where <outcome> is one of `ok`, `noop`, `partial`, `fail`. The Python
-    wrappers read this to disambiguate the noop case from full-success
-    (both exit 0 under the round-4 #5 idempotent-success contract) so
-    `added` / `removed` no longer claim children landed when none did.
-    Returns the outcome string when found, or None if absent.
-
-    v1.9.4 findings #2 / #8: the regex is anchored to a
-    line boundary AND constrained to the four known outcomes; we also
-    prefer the LAST match. The bash side emits the sentinel as the
-    final stderr line right before exit, but earlier `warn` lines can
-    carry user-controllable text (e.g. raw GraphQL error envelopes via
-    `warn "  githubErrors: ${gh_errors}"`). A payload whose error text
-    happened to contain the literal `__ZH_OUTCOME__:ok` would have
-    poisoned the classification with the previous `re.search`
-    first-match-wins behavior. Last-match + line-anchor + alternation
-    closes that seam without changing behavior for clean output.
+    Outcomes: ok, noop, partial, fail. Used to distinguish noop (exit 0,
+    nothing changed) from full success. Prefer the last line-anchored match
+    so warn lines with user-controlled text cannot poison classification.
     """
     if not stderr_plain:
         return None
@@ -2657,15 +2204,11 @@ def _parse_outcome_sentinel(stderr_plain: str) -> str | None:
     last = matches[-1]
     if last in _SENTINEL_OUTCOMES:
         return last
-    # v1.9.4 round-2 finding #4: the regex now accepts any lowercase
-    # outcome word so a bash-side addition (or a typo) is observed,
-    # not swallowed. An unknown outcome falls back to inference and
-    # logs a breadcrumb so the divergence is loud, not silent.
-    # v1.9.6 (issue #39): route the breadcrumb through `logging` rather
-    # than a raw stderr write so it lands on a configurable handler.
-    log.warning(
-        "_parse_outcome_sentinel: unknown outcome %r (known: %s)",
-        last, sorted(_SENTINEL_OUTCOMES),
+    # unknown outcome: log via loguru (issue #39), not stderr
+    logger.warning(
+        "_parse_outcome_sentinel: unknown outcome {!r} (known: {})",
+        last,
+        sorted(_SENTINEL_OUTCOMES),
     )
     return None
 
@@ -2673,58 +2216,12 @@ def _parse_outcome_sentinel(stderr_plain: str) -> str | None:
 def _planning_add_children(noun: str, parent: int, children: list[int],
                            repo_path: str) -> dict:
     if not children:
-        # v1.9.2 round-1 (PR #27) finding #9: include `raw` for shape
-        # parity with the success / partial paths.
-        # v1.9.3 pattern-sweep: include `outcome` for shape parity with
-        # the success / partial / noop paths below.
-        # v1.9.4 finding #6: drop `stderr_plain` from
-        # the early-return dict. The success/partial paths return only
-        # `"stderr": _stderr_plain(r)` (the _plain already collapsed
-        # into the canonical key); exposing both keys here was shape
-        # drift in the wrong direction.
         return {"ok": False, "stderr": "issue_numbers must be non-empty",
                 "parent": parent, "added": [], "added_requested": [],
                 "partial_applied": False, "outcome": "fail", "raw": ""}
     args = [noun, "add", str(parent)] + [str(n) for n in children]
     r = _run_zh(args, cwd=_resolve_cwd(repo_path))
-    # v1.9.2 round-7 finding #10: cmd_subissue_add exits 2 on a
-    # divergence-only partial (some children attached, others didn't).
-    # The pre-fix code collapsed both non-zero codes to ok=False,
-    # added=[], which an agent reads as total failure. Retrying a
-    # total-failure of a partial-success produces double-adds for the
-    # children that DID land. Surface partial_applied analogous to
-    # set_issue_type so the agent can branch.
-    #
-    # v1.9.2 round-1 (PR #27) finding #3 + round-2 finding #5: the
-    # contract is now:
-    #   - `added`: confirmed-landed list. Populated only when
-    #     outcome == "ok" (sentinel observed + clean exit). Empty on
-    #     partial, hard failure, noop, AND ok_unverified (v1.9.4
-    #     round-3 #1: clean exit without sentinel — older zh in a
-    #     mixed-version install). In every empty-`added` state, the
-    #     agent must consult subissue_list to verify the API result.
-    #     The pre-fix `children if r["ok"] else []` overstated `added`
-    #     on noop because exit 0 + r["ok"]=True made the wrapper claim
-    #     the children landed when actually the API reported
-    #     successCount=0 / failedIssues=[]. The bash side now emits
-    #     `__ZH_OUTCOME__:noop` on stderr; we read it and refuse to
-    #     credit children that didn't move.
-    #   - `added_requested`: the input list, ALWAYS. Mirrors the
-    #     estimate_requested / priority_requested pattern from
-    #     create_issue: agents that want to know what was attempted
-    #     read this field; agents that want what's confirmed read
-    #     `added`. Past-tense `added` no longer overstates on partial
-    #     or noop.
-    # On partial, `ok=True or partial_applied=True` (mirrors
-    # set_issue_type). An agent's correct idiom is:
-    #     if r["partial_applied"]: re-verify via subissue_list
-    #     elif r["outcome"] == "noop": already-attached, treat as ok
-    #     elif r["outcome"] == "ok_unverified":
-    #         # v1.9.4 round-3 #1: clean exit without sentinel (mixed-
-    #         # version install). `added` is intentionally empty.
-    #         re-verify via subissue_list
-    #     elif r["ok"]: log(f"Added {len(r['added'])} children")
-    #     else: log(f"Failed (requested: {r['added_requested']})")
+    # exit 2 = partial apply; retrying can double-add children that already landed.
     partial_applied = _safe_int(r.get("exit_code")) == 2
     sentinel_outcome = _parse_outcome_sentinel(_stderr_plain(r))
     sentinel_seen = sentinel_outcome is not None
@@ -2733,29 +2230,12 @@ def _planning_add_children(noun: str, parent: int, children: list[int],
     elif partial_applied:
         outcome = "partial"
     elif r["ok"]:
-        # v1.9.4 round-2 finding #1: when bash exits cleanly but the
-        # sentinel is absent (mixed-version install: newer mcp_server.py
-        # + older zh predating the sentinel emit), callers reading
-        # `outcome` saw "ok" while `added=[]` (from the is_landed gate),
-        # i.e. two consumers reaching opposite conclusions. Tag the
-        # unverified path explicitly so `outcome` agrees with
-        # `added=[]` and operators notice the mixed-install state.
+        # clean exit without __ZH_OUTCOME__ sentinel (mixed zh/mcp versions)
         outcome = "ok_unverified"
     else:
         outcome = "fail"
-    # v1.9.3 finding #1 + v1.9.4 #7: noop must NOT overstate
-    # `added`, and the inference fallback above CANNOT distinguish ok
-    # from noop on its own (both have exit 0 + r["ok"]=True). Require
-    # the explicit sentinel signal to credit children as landed; absent
-    # the sentinel, default `added=[]` so a future bash change that
-    # accidentally drops the sentinel emit can't silently overstate.
-    # v1.9.6 (issue #37): `and not partial_applied` makes is_landed and
-    # partial_applied mutually exclusive at the Python layer. If a future
-    # bash refactor ever emitted `__ZH_OUTCOME__:ok` while exiting 2,
-    # the pre-guard code returned BOTH partial_applied=True AND
-    # added=children (a self-contradictory envelope coupled only by
-    # convention). The guard makes the partial signal win, so drift
-    # produces a debuggable result instead of contradictory state.
+    # credit `added` only on sentinel-confirmed ok; `and not partial_applied`
+    # keeps partial_applied and is_landed mutually exclusive (issue #37).
     is_landed = sentinel_seen and outcome == "ok" and not partial_applied
     return {
         "ok": r["ok"] or partial_applied,
@@ -2765,10 +2245,6 @@ def _planning_add_children(noun: str, parent: int, children: list[int],
         "added": children if is_landed else [],
         "added_requested": children,
         "raw": r["stdout_plain"],
-        # v1.9.3 pattern-sweep: ANSI-clean stderr. The pre-fix surfaced
-        # the raw `stderr` field; MCP clients then had to strip escape
-        # codes themselves to render the message. `stderr_plain` is
-        # already computed in `_run_zh`.
         "stderr": _stderr_plain(r),
     }
 
@@ -2776,19 +2252,13 @@ def _planning_add_children(noun: str, parent: int, children: list[int],
 def _planning_remove_children(noun: str, parent: int, children: list[int],
                               repo_path: str) -> dict:
     if not children:
-        # v1.9.3 pattern-sweep: include `outcome` for shape parity.
-        # v1.9.4 finding #6: drop `stderr_plain` for
-        # consistency with the success path (see _planning_add_children).
         return {"ok": False, "stderr": "issue_numbers must be non-empty",
                 "parent": parent, "removed": [], "removed_requested": [],
                 "partial_applied": False, "outcome": "fail", "raw": ""}
     args = [noun, "remove", str(parent)] + [str(n) for n in children]
     r = _run_zh(args, cwd=_resolve_cwd(repo_path))
-    # v1.9.2 round-7 finding #10: same partial signal as the add path.
-    # v1.9.2 round-2 (PR #27) finding #5: same removed/removed_requested
     # split — on partial, `removed` is empty (verify via
     # subissue_list), `removed_requested` is the input list always.
-    # v1.9.3 finding #1 + v1.9.4 #7: noop must NOT overstate
     # `removed`; the inference fallback can't distinguish ok from noop,
     # so require the sentinel to credit children as landed.
     partial_applied = _safe_int(r.get("exit_code")) == 2
@@ -2799,7 +2269,6 @@ def _planning_remove_children(noun: str, parent: int, children: list[int],
     elif partial_applied:
         outcome = "partial"
     elif r["ok"]:
-        # v1.9.4 round-2 finding #1: see _planning_add_children — tag
         # the sentinel-absent clean-exit path "ok_unverified" so
         # `outcome` agrees with `removed=[]` (the is_landed gate
         # withholds the credit in this state).
@@ -2828,12 +2297,10 @@ def _planning_close(noun: str, number: int, comment: str,
     if comment:
         args.append(comment)
     r = _run_zh(args, cwd=_resolve_cwd(repo_path))
-    # v1.9.2 round-3 (PR #27) finding #8: include `partial_applied`
     # for shape parity with set_issue_type and the planning-children
     # wrappers. cmd_close uses `gh` and has no exit-2 partial today,
     # so the field is always False here — but agents that uniformly
     # read out["partial_applied"] on every write tool should not
-    # KeyError on a close.
     return {
         "ok": r["ok"],
         "partial_applied": False,
@@ -2845,7 +2312,6 @@ def _planning_close(noun: str, number: int, comment: str,
 
 def _planning_reopen(noun: str, number: int, repo_path: str) -> dict:
     r = _run_zh([noun, "reopen", str(number)], cwd=_resolve_cwd(repo_path))
-    # v1.9.2 round-3 (PR #27) finding #8: same `partial_applied`
     # shape-parity addition. Always False; reopen has no partial path.
     return {
         "ok": r["ok"],
@@ -2857,9 +2323,7 @@ def _planning_reopen(noun: str, number: int, repo_path: str) -> dict:
 
 
 def _with_epic_number_alias(d: dict) -> dict:
-    """Add an `epic_number` alias to an epic_* tool response (review #1).
-
-    Pre-v1.9.0 the `epic_*` MCP tools returned `epic_number` in their dict;
+    """
     the rewrite to the generic `_planning_*` helpers uses `number` / `parent`
     instead. To avoid silently breaking agents pinned to the v1.8.x contract,
     every epic_* response carries an `epic_number` alias mirroring whichever
@@ -2867,7 +2331,6 @@ def _with_epic_number_alias(d: dict) -> dict:
     docstrings note the alias is for back-compat and may be removed in a
     future major release.
 
-    v1.9.1 round-3 finding #3: the round-2 #6 fix minimized the
     `_planning_create` blocked-response to 4 keys (ok / blocked / stderr
     / duplicate_check), dropping the `number` and `parent` placeholders
     the alias used to set. Without a fallback, a v1.8.x agent reading
@@ -2879,16 +2342,12 @@ def _with_epic_number_alias(d: dict) -> dict:
         d["epic_number"] = d.get("number")
     elif "parent" in d and "epic_number" not in d:
         d["epic_number"] = d.get("parent")
-    # Fallback for paths that carry neither (blocked / pre-flight
     # errors). v1.8.x clients use `out["epic_number"]` directly; this
     # guarantees the key exists.
     d.setdefault("epic_number", None)
     return d
 
 
-# ---- Epic (the headline noun; backward-compatible tool names) ---------------
-#
-# Every epic_* tool returns the new generic shape plus an `epic_number` alias
 # for back-compat with v1.8.x callers (see _with_epic_number_alias).
 
 @mcp.tool()
@@ -2901,11 +2360,9 @@ def epic_create(title: str, description: str = "", labels: str = "",
                 priority: str = "") -> dict:
     """Create an Epic (an issue with issue-type Epic).
 
-    v1.9.0: an epic is a normal issue typed Epic, with a normal issue
     number and URL (the ZenhubEpic id concept is gone). Every `zh create`
     flag is forwarded.
 
-    v1.9.1 item #5: the duplicate-check pre-flight that create_issue runs
     now applies here too. A blocked match short-circuits the create with
     the candidate matches; pass `confirm_create=True` to override after
     reviewing, or `skip_duplicate_check=True` to bypass entirely (e.g.
@@ -2932,7 +2389,7 @@ def epic_create(title: str, description: str = "", labels: str = "",
         priority: optional priority name, resolved case-insensitively
             against the workspace's configured priorities (discover with
             list_priorities), applied inline at create time exactly as
-            create_issue's `priority` does (v1.9.9 / #61). The response
+            create_issue's `priority` does . The response
             carries priority_requested (the input) and priority (the
             confirmed value); priority_requested=<name> with priority=null
             means the mutation did not confirm (retry) — this does NOT
@@ -2942,10 +2399,9 @@ def epic_create(title: str, description: str = "", labels: str = "",
         dict with: ok, partial_applied, number, epic_number (back-compat
         alias for number), url, type, pipeline, parent, estimate,
         estimate_requested, priority, priority_requested, raw, stderr,
-        duplicate_check (when the pre-flight ran). v1.9.8: partial_applied
+        duplicate_check (when the pre-flight ran). partial_applied
         is True when the epic was created but never wired under the
         requested parent (addSubIssues failed) — a parent-wire failure,
-        not a clean success. v1.9.2 round-2 #4: the three-state
         estimate / priority splits documented for create_issue apply
         here too (compare *_requested against *). On block: ok=False,
         blocked=True, all key placeholders None / "" with
@@ -2969,7 +2425,6 @@ def epic_update(epic_number: int, title: str = "", description: str = "",
     At least one of `title` or `description` must be provided.
 
     Returns: dict with ok, partial_applied, number, epic_number
-    (back-compat alias), raw, stderr. v1.9.2 round-4 #13:
     partial_applied is False here (close / reopen use `gh issue`
     and have no exit-2 partial signal today); included for
     uniform-key parity with set_issue_type and the children
@@ -3004,7 +2459,6 @@ def epic_add_children(epic_number: int, issue_numbers: list[int],
     callers consult subissue_list to verify in those states.
     `added_requested` is the input list, always.
 
-    The correct branching idiom (v1.9.4 round-3):
         if r["partial_applied"]: re-verify via subissue_list
         elif r["outcome"] in ("noop", "ok_unverified"):
             already-attached or unverified → consult subissue_list
@@ -3039,7 +2493,6 @@ def epic_close(epic_number: int, comment: str = "", repo_path: str = "") -> dict
     DESTRUCTIVE: affects board visibility and notifies watchers. Pre-confirm.
 
     Returns: dict with ok, partial_applied, number, epic_number
-    (back-compat alias), raw, stderr. v1.9.2 round-4 #13:
     partial_applied is False here (close / reopen use `gh issue`
     and have no exit-2 partial signal today); included for
     uniform-key parity with set_issue_type and the children
@@ -3055,7 +2508,6 @@ def epic_reopen(epic_number: int, repo_path: str = "") -> dict:
     """Reopen a closed epic issue.
 
     Returns: dict with ok, partial_applied, number, epic_number
-    (back-compat alias), raw, stderr. v1.9.2 round-4 #13:
     partial_applied is False here (close / reopen use `gh issue`
     and have no exit-2 partial signal today); included for
     uniform-key parity with set_issue_type and the children
@@ -3066,8 +2518,6 @@ def epic_reopen(epic_number: int, repo_path: str = "") -> dict:
     ))
 
 
-# ---- Initiative (level 1) ---------------------------------------------------
-#
 # Full surface (8 tools) parallel to epic_*. Each delegates to the same
 # generic _planning_* helper, so adding behavior in one place updates every
 # noun.
@@ -3083,23 +2533,20 @@ def initiative_create(title: str, description: str = "", labels: str = "",
                       priority: str = "") -> dict:
     """Create an Initiative (issue-type Initiative, level 1).
 
-    v1.9.1 item #5: runs the same duplicate-check pre-flight as
     create_issue. Use confirm_create=True to override a block,
     skip_duplicate_check=True to bypass. Pass related_issues=[...] (issue
     numbers) to treat siblings / dependencies as structural relatives so a
     hard match against one downgrades from block to warn (issue #46);
     `parent` is added to that set automatically. Pass priority=<name> to
     set a workspace priority inline at create time, exactly as create_issue
-    does (v1.9.9 / #61); the response carries priority / priority_requested
+    does ; the response carries priority / priority_requested
     with the same three-state contract (priority_requested set + priority
     null = mutation did not confirm; partial_applied is unaffected).
 
     Returns: dict with ok, partial_applied, number, url, type, pipeline,
     parent, estimate, estimate_requested, priority, priority_requested,
-    raw, stderr, duplicate_check (when the pre-flight ran). v1.9.8:
-    partial_applied is True when the issue was created but never wired
+    raw, stderr, duplicate_check (when the pre-flight ran). partial_applied is True when the issue was created but never wired
     under the requested parent (addSubIssues failed) — treat it as a
-    parent-wire failure, not a clean success. v1.9.2 round-2 #4:
     the three-state estimate / priority splits documented for
     create_issue apply here too — compare estimate vs
     estimate_requested (null/null = not requested, N/N = applied,
@@ -3171,7 +2618,6 @@ def initiative_close(number: int, comment: str = "",
     """Close an Initiative issue. DESTRUCTIVE.
 
     Returns: dict with ok, partial_applied, number, raw, stderr.
-    v1.9.2 round-4 #13: partial_applied is included for uniform-key
     parity with set_issue_type and the children wrappers. Always
     False here (close / reopen use `gh issue` and have no exit-2
     partial signal today).
@@ -3184,7 +2630,6 @@ def initiative_reopen(number: int, repo_path: str = "") -> dict:
     """Reopen a closed Initiative issue.
 
     Returns: dict with ok, partial_applied, number, raw, stderr.
-    v1.9.2 round-4 #13: partial_applied is included for uniform-key
     parity with set_issue_type and the children wrappers. Always
     False here (close / reopen use `gh issue` and have no exit-2
     partial signal today).
@@ -3192,7 +2637,6 @@ def initiative_reopen(number: int, repo_path: str = "") -> dict:
     return _planning_reopen("initiative", number, repo_path)
 
 
-# ---- Project (level 2) ------------------------------------------------------
 
 @mcp.tool()
 def project_create(title: str, description: str = "", labels: str = "",
@@ -3205,23 +2649,20 @@ def project_create(title: str, description: str = "", labels: str = "",
                    priority: str = "") -> dict:
     """Create a Project (issue-type Project, level 2).
 
-    v1.9.1 item #5: runs the same duplicate-check pre-flight as
     create_issue. Use confirm_create=True to override a block,
     skip_duplicate_check=True to bypass. Pass related_issues=[...] (issue
     numbers) to treat siblings / dependencies as structural relatives so a
     hard match against one downgrades from block to warn (issue #46);
     `parent` is added to that set automatically. Pass priority=<name> to
     set a workspace priority inline at create time, exactly as create_issue
-    does (v1.9.9 / #61); the response carries priority / priority_requested
+    does ; the response carries priority / priority_requested
     with the same three-state contract (priority_requested set + priority
     null = mutation did not confirm; partial_applied is unaffected).
 
     Returns: dict with ok, partial_applied, number, url, type, pipeline,
     parent, estimate, estimate_requested, priority, priority_requested,
-    raw, stderr, duplicate_check (when the pre-flight ran). v1.9.8:
-    partial_applied is True when the issue was created but never wired
+    raw, stderr, duplicate_check (when the pre-flight ran). partial_applied is True when the issue was created but never wired
     under the requested parent (addSubIssues failed) — treat it as a
-    parent-wire failure, not a clean success. v1.9.2 round-2 #4:
     the three-state estimate / priority splits documented for
     create_issue apply here too — compare estimate vs
     estimate_requested (null/null = not requested, N/N = applied,
@@ -3289,7 +2730,6 @@ def project_close(number: int, comment: str = "",
     """Close a Project issue. DESTRUCTIVE.
 
     Returns: dict with ok, partial_applied, number, raw, stderr.
-    v1.9.2 round-4 #13: partial_applied is included for uniform-key
     parity with set_issue_type and the children wrappers. Always
     False here (close / reopen use `gh issue` and have no exit-2
     partial signal today).
@@ -3302,7 +2742,6 @@ def project_reopen(number: int, repo_path: str = "") -> dict:
     """Reopen a closed Project issue.
 
     Returns: dict with ok, partial_applied, number, raw, stderr.
-    v1.9.2 round-4 #13: partial_applied is included for uniform-key
     parity with set_issue_type and the children wrappers. Always
     False here (close / reopen use `gh issue` and have no exit-2
     partial signal today).
@@ -3310,7 +2749,6 @@ def project_reopen(number: int, repo_path: str = "") -> dict:
     return _planning_reopen("project", number, repo_path)
 
 
-# ---- Sub-task (level 5) -----------------------------------------------------
 
 @mcp.tool()
 def subtask_create(title: str, description: str = "", labels: str = "",
@@ -3323,23 +2761,20 @@ def subtask_create(title: str, description: str = "", labels: str = "",
                    priority: str = "") -> dict:
     """Create a Sub-task (issue-type Sub-task, level 5).
 
-    v1.9.1 item #5: runs the same duplicate-check pre-flight as
     create_issue. Use confirm_create=True to override a block,
     skip_duplicate_check=True to bypass. Pass related_issues=[...] (issue
     numbers) to treat siblings / dependencies as structural relatives so a
     hard match against one downgrades from block to warn (issue #46);
     `parent` is added to that set automatically. Pass priority=<name> to
     set a workspace priority inline at create time, exactly as create_issue
-    does (v1.9.9 / #61); the response carries priority / priority_requested
+    does ; the response carries priority / priority_requested
     with the same three-state contract (priority_requested set + priority
     null = mutation did not confirm; partial_applied is unaffected).
 
     Returns: dict with ok, partial_applied, number, url, type, pipeline,
     parent, estimate, estimate_requested, priority, priority_requested,
-    raw, stderr, duplicate_check (when the pre-flight ran). v1.9.8:
-    partial_applied is True when the issue was created but never wired
+    raw, stderr, duplicate_check (when the pre-flight ran). partial_applied is True when the issue was created but never wired
     under the requested parent (addSubIssues failed) — treat it as a
-    parent-wire failure, not a clean success. v1.9.2 round-2 #4:
     the three-state estimate / priority splits documented for
     create_issue apply here too — compare estimate vs
     estimate_requested (null/null = not requested, N/N = applied,
@@ -3410,7 +2845,6 @@ def subtask_close(number: int, comment: str = "",
     """Close a Sub-task issue. DESTRUCTIVE.
 
     Returns: dict with ok, partial_applied, number, raw, stderr.
-    v1.9.2 round-4 #13: partial_applied is included for uniform-key
     parity with set_issue_type and the children wrappers. Always
     False here (close / reopen use `gh issue` and have no exit-2
     partial signal today).
@@ -3423,7 +2857,6 @@ def subtask_reopen(number: int, repo_path: str = "") -> dict:
     """Reopen a closed Sub-task issue.
 
     Returns: dict with ok, partial_applied, number, raw, stderr.
-    v1.9.2 round-4 #13: partial_applied is included for uniform-key
     parity with set_issue_type and the children wrappers. Always
     False here (close / reopen use `gh issue` and have no exit-2
     partial signal today).
@@ -3431,18 +2864,10 @@ def subtask_reopen(number: int, repo_path: str = "") -> dict:
     return _planning_reopen("subtask", number, repo_path)
 
 
-# Note: *_delete is deliberately not exposed as an MCP tool for any planning
 # level. Permanently deleting an issue is irreversible; do it via
 # `zh delete <N>` directly from the CLI, which requires human deliberation.
 
 
-# =============================================================================
-# Sub-issue management (Issue → Sub-issue hierarchy tier)
-#
-# v1.6.0: these tools call ZenHub's GraphQL API directly via zh_graphql_ops.
-# No more text-contract parsing — the layer that drove four rounds of
-# release-review findings on v1.5.0 is gone.
-# =============================================================================
 
 
 def _resolve_ctx(repo_path: str = ""):
@@ -3464,7 +2889,6 @@ def subissue_list(parent_number: int, repo_path: str = "") -> dict:
     """List sub-issues of a parent issue.
 
     Calls ZenHub's GraphQL `githubChildIssues` connection directly from
-    Python (no bash text contract). v1.9.0 migrated all sub-issue reads
     to githubChildIssues because that is the connection both
     addSubIssues and CreateIssueInput.parentIssueId populate in
     GitHub-backed workspaces (verified live, 2026-05-29);
@@ -3500,10 +2924,7 @@ def subissue_list(parent_number: int, repo_path: str = "") -> dict:
     """
     ctx, err = _resolve_ctx(repo_path)
     if err is not None:
-        # Review finding #8: `parent_state` was missing from the early-
-        # error return shape while the docstring + other returns all
-        # include it. Callers reading `result["parent_state"]` would
-        # KeyError when context resolution fails (no git remote, etc.).
+        # match error-return shape (parent_state documented on all paths)
         return {**err, "parent_number": parent_number,
                 "parent_title": "", "parent_state": None,
                 "total_count": 0, "fetched_count": 0,
@@ -3547,11 +2968,9 @@ def subissue_add_children(parent_number: int, child_numbers: list[int],
     already attached to a different parent is surfaced in the API's
     `failedIssues` array — NOT silently re-parented. The MCP wrapper
     reports succeeded / failed sets sourced from that response, not from
-    the raw input list (a contract finding the v1.5.0 series ate hard).
 
     `outcome="noop"` is the (success=0, failed=0) case — the API neither
     added nor rejected anything, typically because every requested child
-    was already linked to this parent. The bash CLI exits 0 here (round-4
     #5 idempotent-success), and `ok=True` reflects "desired state already
     holds." Branch on `outcome` to distinguish fresh adds from
     already-linked: agents that care about side effects (e.g. announcing
@@ -3565,12 +2984,10 @@ def subissue_add_children(parent_number: int, child_numbers: list[int],
     Returns:
         dict with:
             ok: bool — true iff outcome in ("ok", "partial", "noop").
-                v1.9.2 round-3 #2: aligned with _planning_add_children
                 and set_issue_type so the same `addSubIssues`
                 mutation yields the same `ok` semantic across both
                 MCP surfaces. Branch on `partial_applied` first to
                 distinguish full-success from partial-applied.
-                v1.9.2 round-4 #5: outcome="noop" (every input was
                 already in the desired state) is idempotent success
                 — the bash CLI now exits 0 here too. Agents that
                 read `succeeded` should check outcome to distinguish
@@ -3582,7 +2999,6 @@ def subissue_add_children(parent_number: int, child_numbers: list[int],
                 check partial_applied first; retrying a partial
                 produces duplicate adds for the children that DID
                 land.
-            parent_number: int — v1.9.2 round-4 #2: legacy field;
                 prefer `parent` (added below for cross-surface parity
                 with _planning_add_children / _planning_remove_children).
             parent: int — same value as parent_number. Use this for
@@ -3606,20 +3022,16 @@ def subissue_add_children(parent_number: int, child_numbers: list[int],
                 invariant holds across all return paths:
                 len(succeeded) + len(failed) + len(unaccounted) ==
                 len(deduped input child_numbers). Order preserves the
-                deduped input order. (round-10 Pattern A)
             failed_unknown_count: int — count of `failedIssues`
                 entries that lacked a usable issue `number` (null or
                 non-int). Those entries bumped `failed_count` but
                 are NOT in `failed` (no identifier to surface) and
                 are NOT in `unaccounted` (the API DID report on them,
                 just opaquely). When > 0, `partial_success_warning`
-                names the count so the operator knows. (round-10
-                Pattern A / round-9 #10)
             github_errors: dict | None
             partial_success_warning: str | None — set when the API's
                 successCount diverges from the inferred succeeded
                 set. Warning text is tailored by outcome shape
-                (round-8 #1): "ok→partial" divergence reads
                 "cannot identify which inputs succeeded"; strict
                 noop divergence reads "strict no-op despite N
                 input(s)"; under-reported fail reads "did not
@@ -3633,13 +3045,11 @@ def subissue_add_children(parent_number: int, child_numbers: list[int],
             stderr: str
     """
     if not child_numbers:
-        # Full result shape on the empty-input guard so strict MCP
         # callers don't KeyError on documented keys after a guard
-        # rejection. Mirrors the sprint-tool fix from `bef3313`.
         return {
             "ok": False,
             "partial_applied": False,
-            "parent": parent_number,  # v1.9.2 round-4 #2 alias for parent_number
+            "parent": parent_number,
             "parent_number": parent_number,
             "outcome": "fail",
             "success_count": 0,
@@ -3669,7 +3079,7 @@ def subissue_add_children(parent_number: int, child_numbers: list[int],
         return {
             "ok": False,
             "partial_applied": False,
-            "parent": parent_number,  # v1.9.2 round-4 #2 alias for parent_number
+            "parent": parent_number,
             "parent_number": parent_number,
             "outcome": "fail",
             "success_count": 0,
@@ -3682,19 +3092,13 @@ def subissue_add_children(parent_number: int, child_numbers: list[int],
             "partial_success_warning": None,
             "stderr": str(e),
         }
-    # v1.9.2 round-3 #2: align ok semantic with _planning_add_children
-    # and set_issue_type — `ok` is True on both full success and
-    # partial-applied so the same `addSubIssues` mutation does not
-    # yield contradictory `ok` values across the two MCP surfaces
-    # wrapping it. `partial_applied` carries the distinguishing
-    # signal so an agent that retries on ok=False does not retry a
-    # partial-success and double-attach the children that landed.
+    # align ok semantic with _planning_add_children (partial_applied distinguishes retries)
     outcome = result.get("outcome", "fail")
     partial_applied = outcome == "partial"
     return {
-        "ok": outcome in ("ok", "partial", "noop"),  # round-4 #5: noop is idempotent success
+        "ok": outcome in ("ok", "partial", "noop"),
         "partial_applied": partial_applied,
-        "parent": parent_number,  # v1.9.2 round-4 #2 alias for parent_number
+        "parent": parent_number,
         "parent_number": parent_number,
         "outcome": outcome,
         "success_count": result.get("success_count", 0),
@@ -3718,12 +3122,9 @@ def subissue_remove_children(parent_number: int, child_numbers: list[int],
     parent and lives in the cwd's repo; on failure surfaces a
     consolidated mismatch report rather than bailing at the first error.
 
-    `outcome="noop"` (success=0, failed=0 from the API after pre-flight
-    validation passed) is reported with `ok=True` to match the round-4 #5
-    idempotent-success contract: the desired post-state ("not linked")
-    already holds. The combination is an API-side oddity (e.g. a race
-    where someone else unlinked between pre-flight and mutation), so
-    callers that care should branch on `outcome` and re-list the parent.
+    `outcome="noop"` (success=0, failed=0 after pre-flight) is idempotent
+    success: desired post-state already holds. Branch on `outcome` if side
+    effects matter.
 
     Args:
         parent_number: Issue number of the parent.
@@ -3732,18 +3133,11 @@ def subissue_remove_children(parent_number: int, child_numbers: list[int],
 
     Returns:
         dict with:
-            ok: bool — true iff outcome in ("ok", "partial", "noop"). v1.9.2
-                round-3 #2: aligned with subissue_add_children's
-                semantic and the planning-children wrappers.
+            ok: bool — true iff outcome in ("ok", "partial", "noop").
             partial_applied: bool — true iff outcome == "partial".
                 Branch on this BEFORE ok to detect partials.
-            parent_number: int — v1.9.2 round-4 #2: legacy field;
-                prefer `parent` (added below for cross-surface parity
-                with _planning_add_children / _planning_remove_children).
-            parent: int — same value as parent_number. Use this for
-                portable code that switches between subissue_* and the
-                planning-noun children wrappers; parent_number stays
-                for back-compat.
+            parent_number: int — legacy field; prefer `parent`.
+            parent: int — same value as parent_number.
             outcome: "ok" | "partial" | "fail" | "noop"
             success_count: int
             failed_count: int
@@ -3755,30 +3149,25 @@ def subissue_remove_children(parent_number: int, child_numbers: list[int],
                 bails (parent-not-found, validation-failed). Order
                 preserves deduped input order. Conservation invariant:
                 len(succeeded) + len(failed) + len(unaccounted) ==
-                len(deduped input child_numbers). (round-10 Pattern A)
             failed_unknown_count: int — see subissue_add_children.
             github_errors: dict | None
             partial_success_warning: str | None — set when the API's
                 successCount diverges from the inferred succeeded
                 set. Warning text is tailored by outcome shape
-                (round-8 #1) — see subissue_add_children for the
                 three variants. `succeeded` is empty under
                 divergence in all cases. `outcome` is downgraded to
                 "partial" only when it would otherwise have been
-                "ok" (round-7 #1 made the `add` and `remove`
                 guards match); `noop` and `fail` keep their
                 stronger semantics. Callers should re-list the
                 parent's children to determine actual state.
             stderr: str
     """
     if not child_numbers:
-        # Full result shape on the empty-input guard so strict MCP
         # callers don't KeyError on documented keys after a guard
-        # rejection. Mirrors the sprint-tool fix from `bef3313`.
         return {
             "ok": False,
             "partial_applied": False,
-            "parent": parent_number,  # v1.9.2 round-4 #2 alias for parent_number
+            "parent": parent_number,
             "parent_number": parent_number,
             "outcome": "fail",
             "success_count": 0,
@@ -3808,7 +3197,7 @@ def subissue_remove_children(parent_number: int, child_numbers: list[int],
         return {
             "ok": False,
             "partial_applied": False,
-            "parent": parent_number,  # v1.9.2 round-4 #2 alias for parent_number
+            "parent": parent_number,
             "parent_number": parent_number,
             "outcome": "fail",
             "success_count": 0,
@@ -3821,13 +3210,12 @@ def subissue_remove_children(parent_number: int, child_numbers: list[int],
             "partial_success_warning": None,
             "stderr": str(e),
         }
-    # v1.9.2 round-3 #2: align ok semantic — see subissue_add_children.
     outcome = result.get("outcome", "fail")
     partial_applied = outcome == "partial"
     return {
-        "ok": outcome in ("ok", "partial", "noop"),  # round-4 #5: noop is idempotent success
+        "ok": outcome in ("ok", "partial", "noop"),
         "partial_applied": partial_applied,
-        "parent": parent_number,  # v1.9.2 round-4 #2 alias for parent_number
+        "parent": parent_number,
         "parent_number": parent_number,
         "outcome": outcome,
         "success_count": result.get("success_count", 0),
@@ -3874,10 +3262,7 @@ def subissue_reorder(child_number: int, position: str,
         dict with:
             ok: bool — true iff outcome == "ok"
             child_number: int
-            parent: int | None — same value as parent_number; v1.9.3
-                pattern-sweep added the alias for cross-tool consistency
-                with subissue_add_children / subissue_remove_children
-                (round-4 #2). Use this for portable code.
+            parent: int | None — same value as parent_number (portable alias)
             parent_number: int | None — resolved from the child's
                 parentIssue; legacy field kept for back-compat.
             position: str — normalized human form, e.g. "top",
@@ -3899,12 +3284,6 @@ def subissue_reorder(child_number: int, position: str,
             sibling_number=sibling_number,
         )
     except ZhApiError as e:
-        # v1.9.3 pattern-sweep finding #12: emit the `parent` alias for
-        # cross-tool consistency with subissue_add_children /
-        # subissue_remove_children (round-4 #2). Same value as
-        # parent_number; the alias lets agents that pass results
-        # between subissue_* tools key off a uniform "parent" field
-        # rather than swapping field names per call site.
         return {
             "ok": False,
             "child_number": child_number,
@@ -3926,12 +3305,7 @@ def subissue_reorder(child_number: int, position: str,
     }
 
 
-# =============================================================================
-# Sprint tools (v1.6.0)
-#
-# Sprint functionality inspired by the design proposed in PR #2 by
 # @jeremiahrose; ported here against the new direct-GraphQL pattern.
-# =============================================================================
 
 
 @mcp.tool()
@@ -4025,7 +3399,6 @@ def sprint_show(sprint_name: str, repo_path: str = "") -> dict:
     """
     if not sprint_name or not str(sprint_name).strip():
         # Full result shape with stderr — strict MCP callers shouldn't
-        # KeyError on documented keys after the guard. Review #9.
         return {
             "ok": False,
             "sprint_id": None,
@@ -4129,7 +3502,6 @@ def sprint_add_issues(sprint_name: str, issue_numbers: list[int],
             succeeded: list[int] — API confirmed these were linked
             failed: list[int] — API did not return links for these
             unaccounted: list[int] — canonical mutation-tool key
-                (round-10 Pattern A). Empty on the trusted path
                 (succeeded + failed exhaustively partition the input
                 set). Populated on pre-flight bails (sprint-not-found,
                 issue-not-found) with the un-attempted inputs so the
@@ -4142,9 +3514,7 @@ def sprint_add_issues(sprint_name: str, issue_numbers: list[int],
                 surface here); reserved for future use.
             stderr: str
     """
-    # Full result shape on the empty-input guards so strict MCP callers
     # don't KeyError on documented keys after a guard rejection.
-    # Review #9.
     if not issue_numbers:
         return {
             "ok": False,
@@ -4242,12 +3612,9 @@ def sprint_remove_issues(sprint_name: str, issue_numbers: list[int],
     DOWNGRADED to `partial` (or `fail` when zero positives
     confirmed). `succeeded` lists ONLY inputs the partial walk
     actually observed AND observed as absent from the post-state
-    (round-5 #1: previously inputs the walker never reached were
     incorrectly counted as succeeded). `failed` lists inputs the
     walker observed still-attached. Inputs the walker never
     reached are NEITHER succeeded NOR failed — they're un-verified,
-    surfaced in BOTH the `unaccounted` structured field (round-10
-    Pattern A / round-9 #6) AND `response_anomaly` text, with the
     text's count derived from the field (no arithmetic drift).
     Re-verify with `zh sprint show '<name>'`.
 
@@ -4340,9 +3707,6 @@ def sprint_remove_issues(sprint_name: str, issue_numbers: list[int],
     }
 
 
-# =============================================================================
-# Entry point
-# =============================================================================
 
 if __name__ == "__main__":
     mcp.run()

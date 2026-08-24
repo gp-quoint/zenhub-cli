@@ -16,8 +16,8 @@ logic in `check_duplicate`.
 
 from __future__ import annotations
 
-import similarity
-from similarity import Match, check_duplicate
+from zh import similarity
+from zh.similarity import Match, check_duplicate
 
 
 def _match(number: int, similarity_score: float) -> Match:
@@ -33,7 +33,8 @@ def _match(number: int, similarity_score: float) -> Match:
 
 def _patch_matches(monkeypatch, matches):
     monkeypatch.setattr(
-        similarity, "find_similar",
+        similarity,
+        "find_similar",
         lambda query, repo, **kwargs: list(matches),
     )
 
@@ -42,8 +43,7 @@ def test_hard_match_against_parent_downgrades_to_warn(monkeypatch):
     """A hard match whose number IS the intended parent is structural:
     block → warn, tagged structural_relative, downgraded_structural=True."""
     _patch_matches(monkeypatch, [_match(42, 0.76)])
-    out = check_duplicate("Wave A", "does the text rule", "acme/widgets",
-                          parent=42)
+    out = check_duplicate("Wave A", "does the text rule", "acme/widgets", parent=42)
     assert out["recommendation"] == "warn"
     assert out["downgraded_structural"] is True
     assert out["any_above_hard"] is True
@@ -63,8 +63,7 @@ def test_hard_match_against_non_parent_still_blocks(monkeypatch):
 def test_hard_match_against_related_sibling_downgrades(monkeypatch):
     """A caller-declared sibling (related_issues) is also structural."""
     _patch_matches(monkeypatch, [_match(101, 0.72)])
-    out = check_duplicate("Wave B", "does the image rule", "acme/widgets",
-                          parent=42, related_issues=[100, 101, 102])
+    out = check_duplicate("Wave B", "does the image rule", "acme/widgets", parent=42, related_issues=[100, 101, 102])
     assert out["recommendation"] == "warn"
     assert out["downgraded_structural"] is True
     assert out["matches"][0]["match_kind"] == "structural_relative"
@@ -112,10 +111,8 @@ def test_related_issues_with_none_is_filtered_not_fatal(monkeypatch):
     it, and the recommendation-less dup_info would silently DISABLE the
     duplicate guard. The filter degrades to "no structural relative" so the
     real candidate still blocks."""
-    # A genuine (non-structural) hard match alongside the None entry.
     _patch_matches(monkeypatch, [_match(99, 0.90)])
     out = check_duplicate("T", "b", "acme/widgets", related_issues=[None, 0])
-    # No TypeError, and the genuine duplicate still blocks (guard intact).
     assert out["recommendation"] == "block"
     assert out["matches"][0]["match_kind"] == "candidate"
 

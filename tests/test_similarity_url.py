@@ -12,7 +12,7 @@ regex directly without needing a real git checkout.
 
 from __future__ import annotations
 
-from similarity import _GITHUB_URL_RE
+from zh.similarity import _GITHUB_URL_RE
 
 
 def test_similarity_regex_basic_forms():
@@ -56,9 +56,7 @@ def test_similarity_regex_rejects_garbage_prefix():
     ]
     for url in garbage:
         m = _GITHUB_URL_RE.search(url)
-        assert m is None, (
-            f"garbage-prefixed URL {url!r} should NOT match; got {m!r}"
-        )
+        assert m is None, f"garbage-prefixed URL {url!r} should NOT match; got {m!r}"
 
 
 def test_repo_from_cwd_uses_git_remote_get_url(monkeypatch):
@@ -88,22 +86,14 @@ def test_repo_from_cwd_uses_git_remote_get_url(monkeypatch):
         captured_argv.append(args)
         return "git@github.com:acme/widgets.git\n"
 
-    monkeypatch.setattr(
-        similarity.subprocess, "check_output", fake_check_output
-    )
+    monkeypatch.setattr(similarity.subprocess, "check_output", fake_check_output)
     result = similarity.repo_from_cwd("/tmp/fake-checkout")
     assert result == "acme/widgets"
     assert len(captured_argv) == 1
     args = captured_argv[0]
-    # The relevant subargs (skip `git -C <cwd>` prefix)
-    assert "remote" in args and "get-url" in args, (
-        f"similarity must use `git remote get-url origin`, got {args!r}"
-    )
+    assert "remote" in args and "get-url" in args, f"similarity must use `git remote get-url origin`, got {args!r}"
     assert "origin" in args
-    # Negative assertion: must NOT use `git config --get`
-    assert "config" not in args, (
-        f"similarity must NOT use `git config --get`; got {args!r}"
-    )
+    assert "config" not in args, f"similarity must NOT use `git config --get`; got {args!r}"
 
 
 def test_zh_api_and_similarity_use_same_git_command(monkeypatch):
@@ -120,11 +110,7 @@ def test_zh_api_and_similarity_use_same_git_command(monkeypatch):
         captured.append(list(args))
         return "git@github.com:acme/widgets.git\n"
 
-    # Both modules import `subprocess` by name, so they share the
-    # same module object. One patch covers both call sites.
-    monkeypatch.setattr(
-        similarity.subprocess, "check_output", fake_check_output
-    )
+    monkeypatch.setattr(similarity.subprocess, "check_output", fake_check_output)
 
     similarity.repo_from_cwd("/tmp/x")
     zh_api.get_owner_repo_from_git(cwd="/tmp/x")
@@ -132,13 +118,8 @@ def test_zh_api_and_similarity_use_same_git_command(monkeypatch):
     assert len(captured) == 2, f"expected 2 subprocess calls, got {captured!r}"
     sim_argv, zhapi_argv = captured
 
-    # Both invocations must end with the same git subcommand:
-    # `remote get-url origin`. Argv-prefix may differ (similarity
-    # uses `git -C <cwd>`; zh_api uses subprocess `cwd=<cwd>`),
-    # but the tail subcommand is the load-bearing comparison.
+    # Both invocations must end with the same git subcommand: `remote get-url origin`. Argv-prefix may differ (similarity uses `git -C <cwd>`; zh_api
+    # uses subprocess `cwd=<cwd>`), but the tail subcommand is the load-bearing comparison.
     sim_tail = [a for a in sim_argv if a in {"remote", "get-url", "origin"}]
     zhapi_tail = [a for a in zhapi_argv if a in {"remote", "get-url", "origin"}]
-    assert sim_tail == zhapi_tail == ["remote", "get-url", "origin"], (
-        f"command divergence: similarity={sim_argv!r}, "
-        f"zh_api={zhapi_argv!r}"
-    )
+    assert sim_tail == zhapi_tail == ["remote", "get-url", "origin"], f"command divergence: similarity={sim_argv!r}, zh_api={zhapi_argv!r}"

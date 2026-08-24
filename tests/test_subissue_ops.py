@@ -12,19 +12,12 @@ Every test mocks `RepoContext.query` so no live ZenHub calls are made.
 
 from __future__ import annotations
 
-import json
-from typing import Any
 from unittest.mock import patch
 
 import pytest
-
 import zh_api
 import zh_graphql_ops
 
-
-# =============================================================================
-# Helpers
-# =============================================================================
 
 def _ctx(owner_repo: str = "acme/widgets") -> zh_api.RepoContext:
     """Build a RepoContext skipping the network-bound resolution."""
@@ -40,14 +33,11 @@ def _patch_ctx_query(ctx: zh_api.RepoContext, responses: list[dict]):
     """Patch ctx.query to return each entry of `responses` in turn."""
     it = iter(responses)
     return patch.object(
-        ctx, "query",
+        ctx,
+        "query",
         side_effect=lambda query, variables=None: next(it),
     )
 
-
-# =============================================================================
-# list_sub_issues
-# =============================================================================
 
 def test_list_sub_issues_handles_pipe_in_title_and_check_in_state():
     """Titles containing │ or ✓ are returned untruncated and unmolested.
@@ -76,9 +66,7 @@ def test_list_sub_issues_handles_pipe_in_title_and_check_in_state():
                             "title": weird_title,
                             "state": "CLOSED",
                             "assignees": {"nodes": [{"login": "alice"}]},
-                            "pipelineIssue": {
-                                "pipeline": {"name": "In Review"}
-                            },
+                            "pipelineIssue": {"pipeline": {"name": "In Review"}},
                             "repository": {
                                 "ownerName": "acme",
                                 "name": "widgets",
@@ -119,11 +107,8 @@ def test_list_sub_issues_em_dash_pipeline_kept_literal():
                             "title": "Has em-dash pipeline",
                             "state": "OPEN",
                             "assignees": {"nodes": []},
-                            "pipelineIssue": {
-                                "pipeline": {"name": "Phase 1 — Discovery"}
-                            },
-                            "repository": {
-                                "ownerName": "acme", "name": "widgets"},
+                            "pipelineIssue": {"pipeline": {"name": "Phase 1 — Discovery"}},
+                            "repository": {"ownerName": "acme", "name": "widgets"},
                         },
                         {
                             "number": 102,
@@ -131,8 +116,7 @@ def test_list_sub_issues_em_dash_pipeline_kept_literal():
                             "state": "OPEN",
                             "assignees": {"nodes": []},
                             "pipelineIssue": None,
-                            "repository": {
-                                "ownerName": "acme", "name": "widgets"},
+                            "repository": {"ownerName": "acme", "name": "widgets"},
                         },
                     ],
                 },
@@ -179,10 +163,13 @@ def test_list_sub_issues_walks_pagination():
             "repository": {"ownerName": "acme", "name": "widgets"},
         }
 
-    with _patch_ctx_query(ctx, [
-        _page([_node(100), _node(101)], True, "cursor1"),
-        _page([_node(102)], False, None),
-    ]):
+    with _patch_ctx_query(
+        ctx,
+        [
+            _page([_node(100), _node(101)], True, "cursor1"),
+            _page([_node(102)], False, None),
+        ],
+    ):
         out = zh_graphql_ops.list_sub_issues(ctx, 42)
     assert out["fetched_count"] == 3
     assert [c["number"] for c in out["children"]] == [100, 101, 102]
@@ -210,11 +197,12 @@ def test_list_sub_issues_stuck_cursor_breaks_walk():
                     },
                     "nodes": [
                         {
-                            "number": 100, "title": "A", "state": "OPEN",
+                            "number": 100,
+                            "title": "A",
+                            "state": "OPEN",
                             "assignees": {"nodes": []},
                             "pipelineIssue": None,
-                            "repository": {
-                                "ownerName": "acme", "name": "widgets"},
+                            "repository": {"ownerName": "acme", "name": "widgets"},
                         }
                     ],
                 },
@@ -252,8 +240,7 @@ def test_list_sub_issues_iteration_cap_belt_and_suspenders():
                                 "state": "OPEN",
                                 "assignees": {"nodes": []},
                                 "pipelineIssue": None,
-                                "repository": {
-                                    "ownerName": "acme", "name": "widgets"},
+                                "repository": {"ownerName": "acme", "name": "widgets"},
                             }
                         ],
                     },
@@ -269,10 +256,7 @@ def test_list_sub_issues_iteration_cap_belt_and_suspenders():
             out = zh_graphql_ops.list_sub_issues(ctx, 42)
     finally:
         zh_graphql_ops.MAX_PAGINATION_ITERATIONS = cap
-    assert (
-        out["pagination_warning"] is not None
-        and "iteration cap" in out["pagination_warning"].lower()
-    )
+    assert out["pagination_warning"] is not None and "iteration cap" in out["pagination_warning"].lower()
 
 
 def test_list_sub_issues_returns_repository_per_child():
@@ -294,18 +278,20 @@ def test_list_sub_issues_returns_repository_per_child():
                     "pageInfo": {"hasNextPage": False, "endCursor": None},
                     "nodes": [
                         {
-                            "number": 100, "title": "Local", "state": "OPEN",
+                            "number": 100,
+                            "title": "Local",
+                            "state": "OPEN",
                             "assignees": {"nodes": []},
                             "pipelineIssue": None,
-                            "repository": {
-                                "ownerName": "acme", "name": "widgets"},
+                            "repository": {"ownerName": "acme", "name": "widgets"},
                         },
                         {
-                            "number": 100, "title": "Other repo", "state": "OPEN",
+                            "number": 100,
+                            "title": "Other repo",
+                            "state": "OPEN",
                             "assignees": {"nodes": []},
                             "pipelineIssue": None,
-                            "repository": {
-                                "ownerName": "acme", "name": "OTHER"},
+                            "repository": {"ownerName": "acme", "name": "OTHER"},
                         },
                     ],
                 },
@@ -318,10 +304,6 @@ def test_list_sub_issues_returns_repository_per_child():
     assert repos == {"widgets", "OTHER"}
 
 
-# =============================================================================
-# repos_match — case-insensitive comparison (carried-forward finding)
-# =============================================================================
-
 def test_repos_match_case_insensitive():
     """Owner/repo comparison must be case-insensitive.
 
@@ -329,24 +311,13 @@ def test_repos_match_case_insensitive():
     that broke mixed-case git remotes. The Python port must NOT
     reproduce that bug.
     """
-    assert zh_api.repos_match(
-        {"ownerName": "Acme", "name": "Widgets"}, "acme/widgets"
-    )
-    assert zh_api.repos_match(
-        {"ownerName": "acme", "name": "widgets"}, "Acme/WIDGETS"
-    )
-    assert not zh_api.repos_match(
-        {"ownerName": "acme", "name": "other"}, "acme/widgets"
-    )
+    assert zh_api.repos_match({"ownerName": "Acme", "name": "Widgets"}, "acme/widgets")
+    assert zh_api.repos_match({"ownerName": "acme", "name": "widgets"}, "Acme/WIDGETS")
+    assert not zh_api.repos_match({"ownerName": "acme", "name": "other"}, "acme/widgets")
     assert not zh_api.repos_match(None, "acme/widgets")
 
 
-# =============================================================================
-# add_sub_issues
-# =============================================================================
-
-def _issue_by_info(number: int, *, parent: dict | None = None,
-                   owner_repo: str = "acme/widgets") -> dict:
+def _issue_by_info(number: int, *, parent: dict | None = None, owner_repo: str = "acme/widgets") -> dict:
     """Build a stub issueByInfo response."""
     owner, _, name = owner_repo.partition("/")
     return {
@@ -384,8 +355,7 @@ def test_add_sub_issues_partial_failure_split():
                     "failedIssues": [
                         {
                             "number": 102,
-                            "repository": {
-                                "ownerName": "acme", "name": "widgets"},
+                            "repository": {"ownerName": "acme", "name": "widgets"},
                         }
                     ],
                     "githubErrors": {},
@@ -464,10 +434,6 @@ def test_add_sub_issues_rejects_bool_input():
         zh_graphql_ops.reorder_sub_issue(ctx, True, "top")  # type: ignore[arg-type]
 
 
-# =============================================================================
-# remove_sub_issues
-# =============================================================================
-
 def test_remove_sub_issues_wrong_parent_preflight():
     """Pre-flight catches children whose actual parent is not us.
 
@@ -488,9 +454,14 @@ def test_remove_sub_issues_wrong_parent_preflight():
     responses = [
         _issue_by_info(42),
         _issue_by_info(100, parent=correct_parent),
-        _issue_by_info(101, parent={
-            **correct_parent, "id": "issue-gid-999", "number": 999,
-        }),  # wrong parent
+        _issue_by_info(
+            101,
+            parent={
+                **correct_parent,
+                "id": "issue-gid-999",
+                "number": 999,
+            },
+        ),  # wrong parent
         _issue_by_info(102, parent=correct_parent),
     ]
     with _patch_ctx_query(ctx, responses):
@@ -557,10 +528,6 @@ def test_remove_sub_issues_happy_path():
     assert sorted(out["succeeded"]) == [100, 101]
 
 
-# =============================================================================
-# reorder_sub_issue
-# =============================================================================
-
 def test_reorder_sub_issue_only_child_is_noop():
     """Only-child reorder: outcome=noop, no mutation fired, ok=False.
 
@@ -593,7 +560,8 @@ def test_reorder_sub_issue_only_child_is_noop():
                                 "assignees": {"nodes": []},
                                 "pipelineIssue": None,
                                 "repository": {
-                                    "ownerName": "acme", "name": "widgets",
+                                    "ownerName": "acme",
+                                    "name": "widgets",
                                 },
                             }
                         ],
@@ -624,14 +592,10 @@ def test_reorder_sub_issue_rejects_self_anchor():
     """Review finding #9: anchoring after/before yourself is meaningless."""
     ctx = _ctx()
     with pytest.raises(zh_api.ZhApiError) as exc:
-        zh_graphql_ops.reorder_sub_issue(
-            ctx, 100, "after", sibling_number=100
-        )
+        zh_graphql_ops.reorder_sub_issue(ctx, 100, "after", sibling_number=100)
     assert "self-anchor" in str(exc.value).lower()
     with pytest.raises(zh_api.ZhApiError):
-        zh_graphql_ops.reorder_sub_issue(
-            ctx, 100, "before", sibling_number=100
-        )
+        zh_graphql_ops.reorder_sub_issue(ctx, 100, "before", sibling_number=100)
 
 
 def test_reorder_sub_issue_top_crosses_repos_via_id_anchor():
@@ -674,7 +638,8 @@ def test_reorder_sub_issue_top_crosses_repos_via_id_anchor():
                                 "assignees": {"nodes": []},
                                 "pipelineIssue": None,
                                 "repository": {
-                                    "ownerName": "acme", "name": "OTHER",
+                                    "ownerName": "acme",
+                                    "name": "OTHER",
                                 },
                             },
                             {
@@ -685,7 +650,8 @@ def test_reorder_sub_issue_top_crosses_repos_via_id_anchor():
                                 "assignees": {"nodes": []},
                                 "pipelineIssue": None,
                                 "repository": {
-                                    "ownerName": "acme", "name": "widgets",
+                                    "ownerName": "acme",
+                                    "name": "widgets",
                                 },
                             },
                         ],
@@ -697,7 +663,8 @@ def test_reorder_sub_issue_top_crosses_repos_via_id_anchor():
         {
             "data": {
                 "reprioritizeSubIssue": {
-                    "success": True, "githubErrors": {},
+                    "success": True,
+                    "githubErrors": {},
                 }
             }
         },
@@ -744,7 +711,8 @@ def test_reorder_sub_issue_refuses_when_both_anchors_null():
                                 "assignees": {"nodes": []},
                                 "pipelineIssue": None,
                                 "repository": {
-                                    "ownerName": "acme", "name": "widgets",
+                                    "ownerName": "acme",
+                                    "name": "widgets",
                                 },
                             },
                         ],
@@ -760,10 +728,6 @@ def test_reorder_sub_issue_refuses_when_both_anchors_null():
     assert out["ok"] is False
     assert out["outcome"] == "noop"
 
-
-# =============================================================================
-# succeeded-divergence handling (review finding #3)
-# =============================================================================
 
 def test_add_sub_issues_succeeded_divergence_returns_empty_succeeded():
     """When successCount doesn't match `input - failedIssues`, refuse to claim.
@@ -783,8 +747,8 @@ def test_add_sub_issues_succeeded_divergence_returns_empty_succeeded():
         {
             "data": {
                 "addSubIssues": {
-                    "successCount": 1,           # only one actually landed
-                    "failedIssues": [],          # but API didn't tell us which
+                    "successCount": 1,  # only one actually landed
+                    "failedIssues": [],  # but API didn't tell us which
                     "githubErrors": {},
                 }
             }
@@ -795,13 +759,10 @@ def test_add_sub_issues_succeeded_divergence_returns_empty_succeeded():
     assert out["succeeded"] == []
     assert out["partial_success_warning"] is not None
     assert "successCount=1" in out["partial_success_warning"]
-    # Round-6 #3: round-5 fixed the data (succeeded=[]) but left the
-    # signal stale. SPEC: when partial_success_warning is set AND
-    # the API said it succeeded, `ok` and `outcome` must agree with
-    # the data — outcome="partial", ok=False.
+    # Round-6 #3: round-5 fixed the data (succeeded=[]) but left the signal stale. SPEC: when partial_success_warning is set AND the API said it
+    # succeeded, `ok` and `outcome` must agree with the data — outcome="partial", ok=False.
     assert out["outcome"] == "partial", (
-        "Round-6 #3: divergence guard fires → outcome must downgrade "
-        "to 'partial', not the API's success_count-derived 'ok'."
+        "Round-6 #3: divergence guard fires → outcome must downgrade to 'partial', not the API's success_count-derived 'ok'."
     )
     assert out["ok"] is False, (
         "Round-6 #3: ok must agree with `succeeded == []` — it makes "
@@ -877,23 +838,17 @@ def test_remove_sub_issues_divergence_noop_preserved():
     with _patch_ctx_query(ctx, responses):
         out = zh_graphql_ops.remove_sub_issues(ctx, 42, [100, 101])
     assert out["outcome"] == "noop", (
-        f"Round-7 #1: strict no-op (success=0, failed=0) must stay "
-        f"`noop` even when divergence guard fires; got {out['outcome']!r}"
+        f"Round-7 #1: strict no-op (success=0, failed=0) must stay `noop` even when divergence guard fires; got {out['outcome']!r}"
     )
     assert out["succeeded"] == []
     assert out["failed"] == []
-    # The divergence guard still fires (succeeded=[] inferred-from
-    # length mismatch), so the warning is still set — what matters
-    # is the outcome label.
+    # The divergence guard still fires (succeeded=[] inferred-from length mismatch), so the warning is
+    # still set — what matters is the outcome label.
     assert out["partial_success_warning"] is not None
-    # Round-8 #1: warning text must reflect the noop shape, not the
-    # generic "cannot identify" phrasing that ok→partial divergence
-    # uses. The operator needs to know this was a strict no-op so
-    # they know to investigate whether the inputs were already in
-    # the requested state vs. silently rejected.
+    # Round-8 #1: warning text must reflect the noop shape, not the generic "cannot identify" phrasing that ok→partial divergence uses. The operator needs to know this was a
+    # strict no-op so they know to investigate whether the inputs were already in the requested state vs. silently rejected.
     assert "strict no-op" in out["partial_success_warning"], (
-        f"Round-8 #1: noop-divergence warning must name the shape; "
-        f"got {out['partial_success_warning']!r}"
+        f"Round-8 #1: noop-divergence warning must name the shape; got {out['partial_success_warning']!r}"
     )
 
 
@@ -917,10 +872,12 @@ def test_remove_sub_issues_divergence_fail_preserved():
             "data": {
                 "removeSubIssues": {
                     "successCount": 0,
-                    "failedIssues": [{
-                        "number": 100,
-                        "repository": {"ownerName": "acme", "name": "widgets"},
-                    }],
+                    "failedIssues": [
+                        {
+                            "number": 100,
+                            "repository": {"ownerName": "acme", "name": "widgets"},
+                        }
+                    ],
                     "githubErrors": {},
                 }
             }
@@ -928,18 +885,14 @@ def test_remove_sub_issues_divergence_fail_preserved():
     ]
     with _patch_ctx_query(ctx, responses):
         out = zh_graphql_ops.remove_sub_issues(ctx, 42, [100, 101])
-    assert out["outcome"] == "fail", (
-        f"Round-7 #1: real failure must stay `fail` — divergence "
-        f"warning does not downgrade it; got {out['outcome']!r}"
-    )
+    assert out["outcome"] == "fail", f"Round-7 #1: real failure must stay `fail` — divergence warning does not downgrade it; got {out['outcome']!r}"
     assert out["succeeded"] == []
     # Divergence fires (success=0, failed=1, but 2 inputs → mismatch)
     assert out["partial_success_warning"] is not None
     # Round-8 #1: under-reported fail names the input(s) the API
     # neither succeeded nor failed.
     assert "did not report on" in out["partial_success_warning"], (
-        f"Round-8 #1: fail-divergence warning must name the under-"
-        f"report; got {out['partial_success_warning']!r}"
+        f"Round-8 #1: fail-divergence warning must name the under-report; got {out['partial_success_warning']!r}"
     )
 
 
@@ -985,10 +938,12 @@ def test_add_sub_issues_divergence_fail_preserved():
             "data": {
                 "addSubIssues": {
                     "successCount": 0,
-                    "failedIssues": [{
-                        "number": 100,
-                        "repository": {"ownerName": "acme", "name": "widgets"},
-                    }],
+                    "failedIssues": [
+                        {
+                            "number": 100,
+                            "repository": {"ownerName": "acme", "name": "widgets"},
+                        }
+                    ],
                     "githubErrors": {},
                 }
             }
@@ -1013,7 +968,7 @@ def test_add_sub_issues_full_success_when_count_matches():
         {
             "data": {
                 "addSubIssues": {
-                    "successCount": 2,           # matches the 2 inputs
+                    "successCount": 2,  # matches the 2 inputs
                     "failedIssues": [],
                     "githubErrors": {},
                 }
@@ -1026,10 +981,6 @@ def test_add_sub_issues_full_success_when_count_matches():
     assert sorted(out["succeeded"]) == [100, 101]
     assert out["partial_success_warning"] is None
 
-
-# =============================================================================
-# round-8 #1: ok→partial divergence warning text shape
-# =============================================================================
 
 def test_add_sub_issues_ok_divergence_warning_text():
     """Round-8 #1: when outcome would have been "ok" but divergence
@@ -1045,7 +996,7 @@ def test_add_sub_issues_ok_divergence_warning_text():
         {
             "data": {
                 "addSubIssues": {
-                    "successCount": 1,        # 1 but inferred=[100,101]
+                    "successCount": 1,  # 1 but inferred=[100,101]
                     "failedIssues": [],
                     "githubErrors": {},
                 }
@@ -1057,12 +1008,8 @@ def test_add_sub_issues_ok_divergence_warning_text():
     assert out["outcome"] == "partial"
     assert out["succeeded"] == []
     assert out["partial_success_warning"] is not None
-    assert (
-        "cannot identify which inputs succeeded"
-        in out["partial_success_warning"].lower()
-    ), (
-        f"Round-8 #1: ok→partial divergence warning must name the "
-        f"can't-identify shape; got {out['partial_success_warning']!r}"
+    assert "cannot identify which inputs succeeded" in out["partial_success_warning"].lower(), (
+        f"Round-8 #1: ok→partial divergence warning must name the can't-identify shape; got {out['partial_success_warning']!r}"
     )
 
 
@@ -1094,15 +1041,8 @@ def test_remove_sub_issues_ok_divergence_warning_text():
     assert out["outcome"] == "partial"
     assert out["succeeded"] == []
     assert out["partial_success_warning"] is not None
-    assert (
-        "cannot identify which inputs succeeded"
-        in out["partial_success_warning"].lower()
-    )
+    assert "cannot identify which inputs succeeded" in out["partial_success_warning"].lower()
 
-
-# =============================================================================
-# round-8 #2: `unaccounted` field + count conservation
-# =============================================================================
 
 def test_subissue_add_count_conservation_under_fail_divergence():
     """Round-8 #2: under fail-divergence (success=0, failed=[100],
@@ -1121,10 +1061,12 @@ def test_subissue_add_count_conservation_under_fail_divergence():
             "data": {
                 "addSubIssues": {
                     "successCount": 0,
-                    "failedIssues": [{
-                        "number": 100,
-                        "repository": {"ownerName": "acme", "name": "widgets"},
-                    }],
+                    "failedIssues": [
+                        {
+                            "number": 100,
+                            "repository": {"ownerName": "acme", "name": "widgets"},
+                        }
+                    ],
                     "githubErrors": {},
                 }
             }
@@ -1139,10 +1081,7 @@ def test_subissue_add_count_conservation_under_fail_divergence():
     # Order preserved from inputs (round-10 #14).
     assert out["unaccounted"] == [101, 102]
     # Conservation invariant.
-    assert (
-        len(out["succeeded"]) + len(out["failed"]) + len(out["unaccounted"])
-        == 3
-    )
+    assert len(out["succeeded"]) + len(out["failed"]) + len(out["unaccounted"]) == 3
 
 
 def test_subissue_remove_count_conservation_under_fail_divergence():
@@ -1163,10 +1102,12 @@ def test_subissue_remove_count_conservation_under_fail_divergence():
             "data": {
                 "removeSubIssues": {
                     "successCount": 0,
-                    "failedIssues": [{
-                        "number": 100,
-                        "repository": {"ownerName": "acme", "name": "widgets"},
-                    }],
+                    "failedIssues": [
+                        {
+                            "number": 100,
+                            "repository": {"ownerName": "acme", "name": "widgets"},
+                        }
+                    ],
                     "githubErrors": {},
                 }
             }
@@ -1178,10 +1119,7 @@ def test_subissue_remove_count_conservation_under_fail_divergence():
     assert out["succeeded"] == []
     assert [f["number"] for f in out["failed"]] == [100]
     assert out["unaccounted"] == [101, 102]
-    assert (
-        len(out["succeeded"]) + len(out["failed"]) + len(out["unaccounted"])
-        == 3
-    )
+    assert len(out["succeeded"]) + len(out["failed"]) + len(out["unaccounted"]) == 3
 
 
 def test_subissue_add_unaccounted_empty_on_trusted_path():
@@ -1210,10 +1148,6 @@ def test_subissue_add_unaccounted_empty_on_trusted_path():
     assert out["unaccounted"] == []
 
 
-# =============================================================================
-# round-8 #4: pre-flight return shape completeness
-# =============================================================================
-
 def test_subissue_add_pre_flight_result_shape_complete():
     """Round-8 #4 / Round-10 Pattern A: every pre-flight return site
     MUST include the full documented result shape — `unaccounted`,
@@ -1233,9 +1167,18 @@ def test_subissue_add_pre_flight_result_shape_complete():
         out = zh_graphql_ops.add_sub_issues(ctx, 42, [100, 101, 102])
     # All keys present.
     for k in (
-        "ok", "parent_number", "outcome", "success_count", "failed_count",
-        "succeeded", "failed", "unaccounted", "failed_unknown_count",
-        "github_errors", "partial_success_warning", "error",
+        "ok",
+        "parent_number",
+        "outcome",
+        "success_count",
+        "failed_count",
+        "succeeded",
+        "failed",
+        "unaccounted",
+        "failed_unknown_count",
+        "github_errors",
+        "partial_success_warning",
+        "error",
     ):
         assert k in out, f"pre-flight (parent-not-found) missing key {k!r}"
     # Round-10: parent-not-found means NOTHING was attempted.
@@ -1243,24 +1186,23 @@ def test_subissue_add_pre_flight_result_shape_complete():
     assert out["partial_success_warning"] is None
     assert out["failed_unknown_count"] == 0
     # Conservation invariant.
-    assert (
-        len(out["succeeded"]) + len(out["failed"]) + len(out["unaccounted"])
-        == 3
-    )
+    assert len(out["succeeded"]) + len(out["failed"]) + len(out["unaccounted"]) == 3
 
     # Child not found — the second pre-flight return site. Mix of
     # found and not-found inputs so unaccounted is non-trivial.
     ctx2 = _ctx()
     responses = [
         _issue_by_info(42),
-        _issue_by_info(100),                # found
-        {"data": {"issueByInfo": None}},    # 101 lookup misses
-        _issue_by_info(102),                # found
+        _issue_by_info(100),  # found
+        {"data": {"issueByInfo": None}},  # 101 lookup misses
+        _issue_by_info(102),  # found
     ]
     with _patch_ctx_query(ctx2, responses):
         out2 = zh_graphql_ops.add_sub_issues(ctx2, 42, [100, 101, 102])
     for k in (
-        "unaccounted", "partial_success_warning", "failed_unknown_count",
+        "unaccounted",
+        "partial_success_warning",
+        "failed_unknown_count",
     ):
         assert k in out2, f"pre-flight (child-not-found) missing key {k!r}"
     # Round-10: the resolved inputs (100, 102) weren't attempted, so
@@ -1269,10 +1211,7 @@ def test_subissue_add_pre_flight_result_shape_complete():
     assert out2["unaccounted"] == [100, 102]
     assert out2["partial_success_warning"] is None
     # Conservation.
-    assert (
-        len(out2["succeeded"]) + len(out2["failed"]) + len(out2["unaccounted"])
-        == 3
-    )
+    assert len(out2["succeeded"]) + len(out2["failed"]) + len(out2["unaccounted"]) == 3
 
 
 def test_subissue_remove_pre_flight_result_shape_complete():
@@ -1288,19 +1227,17 @@ def test_subissue_remove_pre_flight_result_shape_complete():
     with _patch_ctx_query(ctx, responses):
         out = zh_graphql_ops.remove_sub_issues(ctx, 42, [100, 101, 102])
     for k in (
-        "unaccounted", "partial_success_warning", "failed_unknown_count",
+        "unaccounted",
+        "partial_success_warning",
+        "failed_unknown_count",
     ):
         assert k in out, f"remove pre-flight (parent-not-found) missing {k!r}"
     assert out["unaccounted"] == [100, 101, 102]
     assert out["partial_success_warning"] is None
-    assert (
-        len(out["succeeded"]) + len(out["failed"]) + len(out["unaccounted"])
-        == 3
-    )
+    assert len(out["succeeded"]) + len(out["failed"]) + len(out["unaccounted"]) == 3
 
-    # Validation failed: mixed — one child has correct parent, one
-    # has wrong parent. The correct one wasn't attempted (the bail
-    # aborts before the mutation), so it lands in `unaccounted`.
+    # Validation failed: mixed — one child has correct parent, one has wrong parent. The correct one wasn't attempted (the
+    # bail aborts before the mutation), so it lands in `unaccounted`.
     correct_parent = {
         "id": "issue-gid-42",
         "number": 42,
@@ -1317,13 +1254,15 @@ def test_subissue_remove_pre_flight_result_shape_complete():
     responses = [
         _issue_by_info(42),
         _issue_by_info(100, parent=correct_parent),  # valid
-        _issue_by_info(101, parent=wrong),           # invalid → mismatch
+        _issue_by_info(101, parent=wrong),  # invalid → mismatch
     ]
     with _patch_ctx_query(ctx2, responses):
         out2 = zh_graphql_ops.remove_sub_issues(ctx2, 42, [100, 101])
     assert "Pre-flight validation failed" in (out2["error"] or "")
     for k in (
-        "unaccounted", "partial_success_warning", "failed_unknown_count",
+        "unaccounted",
+        "partial_success_warning",
+        "failed_unknown_count",
     ):
         assert k in out2, f"remove pre-flight (validation) missing {k!r}"
     # Round-10: 100 passed validation but wasn't attempted; 101 is in
@@ -1331,16 +1270,8 @@ def test_subissue_remove_pre_flight_result_shape_complete():
     assert [f["number"] for f in out2["failed"]] == [101]
     assert out2["unaccounted"] == [100]
     assert out2["partial_success_warning"] is None
-    assert (
-        len(out2["succeeded"]) + len(out2["failed"]) + len(out2["unaccounted"])
-        == 2
-    )
+    assert len(out2["succeeded"]) + len(out2["failed"]) + len(out2["unaccounted"]) == 2
 
-
-# =============================================================================
-# round-10 Pattern A: order-preserving unaccounted, None-numbered
-# failedIssues, duplicate / out-of-input failed entries
-# =============================================================================
 
 def test_subissue_add_unaccounted_preserves_input_order():
     """Round-9 #14 / Round-10 Pattern A: `unaccounted` must preserve
@@ -1361,10 +1292,12 @@ def test_subissue_add_unaccounted_preserves_input_order():
             "data": {
                 "addSubIssues": {
                     "successCount": 0,
-                    "failedIssues": [{
-                        "number": 100,
-                        "repository": {"ownerName": "acme", "name": "widgets"},
-                    }],
+                    "failedIssues": [
+                        {
+                            "number": 100,
+                            "repository": {"ownerName": "acme", "name": "widgets"},
+                        }
+                    ],
                     "githubErrors": {},
                 }
             }
@@ -1397,10 +1330,12 @@ def test_subissue_remove_unaccounted_preserves_input_order():
             "data": {
                 "removeSubIssues": {
                     "successCount": 0,
-                    "failedIssues": [{
-                        "number": 100,
-                        "repository": {"ownerName": "acme", "name": "widgets"},
-                    }],
+                    "failedIssues": [
+                        {
+                            "number": 100,
+                            "repository": {"ownerName": "acme", "name": "widgets"},
+                        }
+                    ],
                     "githubErrors": {},
                 }
             }
@@ -1430,11 +1365,8 @@ def test_subissue_add_count_conservation_with_none_numbered_failed():
         {
             "data": {
                 "addSubIssues": {
-                    # Two API-side failures: one with a number (100),
-                    # one without (None). successCount=1 says one of
-                    # the remaining inputs succeeded — but we don't
-                    # know which one, so divergence fires (inferred
-                    # set would be [101, 102] of length 2 ≠ 1).
+                # Two API-side failures: one with a number (100), one without (None). successCount=1 says one of the remaining inputs succeeded — but we don't
+                # know which one, so divergence fires (inferred set would be [101, 102] of length 2 ≠ 1).
                     "successCount": 1,
                     "failedIssues": [
                         {
@@ -1551,14 +1483,8 @@ def test_subissue_add_count_conservation_with_out_of_input_failed_issues():
     # so it's empty.
     assert out["unaccounted"] == []
     # Conservation over inputs.
-    assert (
-        len(out["succeeded"]) + len(out["unaccounted"]) == 2
-    )
+    assert len(out["succeeded"]) + len(out["unaccounted"]) == 2
 
-
-# =============================================================================
-# round-10 Pattern B: derived-count text must match canonical field
-# =============================================================================
 
 def test_subissue_add_fail_divergence_warning_count_matches_unaccounted():
     """Round-9 #2 / Round-10 Pattern B: the fail-divergence warning
@@ -1577,10 +1503,12 @@ def test_subissue_add_fail_divergence_warning_count_matches_unaccounted():
             "data": {
                 "addSubIssues": {
                     "successCount": 0,
-                    "failedIssues": [{
-                        "number": 100,
-                        "repository": {"ownerName": "acme", "name": "widgets"},
-                    }],
+                    "failedIssues": [
+                        {
+                            "number": 100,
+                            "repository": {"ownerName": "acme", "name": "widgets"},
+                        }
+                    ],
                     "githubErrors": {},
                 }
             }
@@ -1612,10 +1540,12 @@ def test_subissue_remove_fail_divergence_warning_count_matches_unaccounted():
             "data": {
                 "removeSubIssues": {
                     "successCount": 0,
-                    "failedIssues": [{
-                        "number": 100,
-                        "repository": {"ownerName": "acme", "name": "widgets"},
-                    }],
+                    "failedIssues": [
+                        {
+                            "number": 100,
+                            "repository": {"ownerName": "acme", "name": "widgets"},
+                        }
+                    ],
                     "githubErrors": {},
                 }
             }
@@ -1627,10 +1557,6 @@ def test_subissue_remove_fail_divergence_warning_count_matches_unaccounted():
     assert len(out["unaccounted"]) == 2
     assert "report on 2 input(s)" in out["partial_success_warning"]
 
-
-# =============================================================================
-# listing surfaces `id` (review finding #2a)
-# =============================================================================
 
 def test_list_sub_issues_returns_id_for_each_child():
     """`id` is now part of every CHILD node; tests anchoring depends on it."""
@@ -1653,7 +1579,8 @@ def test_list_sub_issues_returns_id_for_each_child():
                             "assignees": {"nodes": []},
                             "pipelineIssue": None,
                             "repository": {
-                                "ownerName": "acme", "name": "widgets",
+                                "ownerName": "acme",
+                                "name": "widgets",
                             },
                         }
                     ],
@@ -1664,25 +1591,6 @@ def test_list_sub_issues_returns_id_for_each_child():
     with _patch_ctx_query(ctx, [response]):
         out = zh_graphql_ops.list_sub_issues(ctx, 42)
     assert out["children"][0]["id"] == "issue-gid-99"
-
-
-# ===========================================================================
-# Divergence regression pin (v1.9.0 PR #23 root cause).
-#
-# Verified live against a GitHub-backed workspace (2026-05-29): both
-# addSubIssues and CreateIssueInput.parentIssueId populate the
-# githubChildIssues connection; zenhubChildIssues stays empty for those
-# writes. v1.9.0 migrated every reader (cmd_subissue_list, cmd_hierarchy_show,
-# cmd_issue, the bash walkers, and list_sub_issues here) to read
-# githubChildIssues so that an issue wired via either of those writes shows
-# up on subsequent reads.
-#
-# The test below stubs the SAME response shape the live workspace returns
-# after `addSubIssues parent=42 children=[100]`: githubChildIssues has the
-# child, zenhubChildIssues would be {totalCount: 0, nodes: []}. If a future
-# refactor relapses to reading zenhubChildIssues, the parent/child round
-# trip silently shows zero children and this test will catch it.
-# ===========================================================================
 
 
 def test_list_sub_issues_reads_github_child_issues_not_zenhub():
@@ -1715,7 +1623,8 @@ def test_list_sub_issues_reads_github_child_issues_not_zenhub():
                             "assignees": {"nodes": []},
                             "pipelineIssue": None,
                             "repository": {
-                                "ownerName": "acme", "name": "widgets",
+                                "ownerName": "acme",
+                                "name": "widgets",
                             },
                         }
                     ],
@@ -1735,7 +1644,8 @@ def test_list_sub_issues_reads_github_child_issues_not_zenhub():
                                 "pipeline": {"name": "Product Backlog"},
                             },
                             "repository": {
-                                "ownerName": "acme", "name": "widgets",
+                                "ownerName": "acme",
+                                "name": "widgets",
                             },
                         }
                     ],
@@ -1777,10 +1687,15 @@ def test_list_sub_issues_zero_children_when_github_connection_empty():
                     "totalCount": 5,
                     "pageInfo": {"hasNextPage": False, "endCursor": None},
                     "nodes": [
-                        {"id": "x", "number": n, "title": f"decoy-{n}",
-                         "state": "OPEN", "assignees": {"nodes": []},
-                         "pipelineIssue": None,
-                         "repository": {"ownerName": "acme", "name": "widgets"}}
+                        {
+                            "id": "x",
+                            "number": n,
+                            "title": f"decoy-{n}",
+                            "state": "OPEN",
+                            "assignees": {"nodes": []},
+                            "pipelineIssue": None,
+                            "repository": {"ownerName": "acme", "name": "widgets"},
+                        }
                         for n in (1, 2, 3, 4, 5)
                     ],
                 },

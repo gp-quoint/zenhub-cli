@@ -18,11 +18,19 @@ Open a regular [GitHub issue](https://github.com/daniel-pittman/zenhub-cli/issue
 3. Open the PR against `develop`. The `main` branch only receives release PRs from `develop` (it's the stable line that the tags point at).
 4. Address review feedback. Once approved and CI passes, a maintainer will merge.
 
+## Releases / versioning
+
+Package version is derived from **git tags** via [hatch-vcs](https://github.com/ofek/hatch-vcs) (no hand-maintained `VERSION` file or static `pyproject.toml` version).
+
+1. Merge the release PR into `main`.
+2. Tag the release commit: `git tag -a vX.Y.Z -m "vX.Y.Z"` and push the tag.
+3. `zh version` on a clean tagged checkout prints `X.Y.Z`; between tags it prints a local/dev form (e.g. `X.Y.Z.devN+gHASH`).
+
 The first time an outside contributor opens a PR, GitHub holds Actions execution pending maintainer approval — this is the "Require approval for all outside collaborators" gate documented in [`SECURITY.md` §1](SECURITY.md). The PR is fine; it just may sit briefly before workflows start.
 
 ## CI and review automation
 
-- **`syntax` (required)** — bash and Python syntax checks plus the pytest suite across Python 3.10/3.11/3.12. Must pass before merge into `develop` or `main`. No secrets needed; runs on every push and PR including from forks.
+- **`syntax` (required)** — ruff, basedpyright, and pytest on Python 3.13. Must pass before merge into `develop` or `main`. No secrets needed; runs on every push and PR including from forks.
 - **Claude code review** — automated PR review using a subscription-bound OAuth token. Output appears as a PR comment and drives the `review-gate` check (below).
 - **Semgrep security scan (advisory)**: free, token-free Semgrep OSS (`p/python`, `p/bash`, `p/secrets`, `p/ci`) runs first on every PR and posts a single sticky findings comment, which the Claude code review folds into its analysis. No API key; advisory.
 

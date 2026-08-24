@@ -23,38 +23,32 @@ the function's documented contract says, not what the code does.
 
 from __future__ import annotations
 
+import mcp_server
 import pytest
-
 import zh_api
 import zh_graphql_ops
-import mcp_server
-
 from tests._fixtures import (
-    make_ctx,
-    patch_ctx_query,
+    add_issues_to_sprints_response,
+    add_sub_issues_response,
+    child_node,
     issue_by_info_response,
     issue_not_found_response,
-    child_node,
-    subissue_list_response,
-    subissue_parent_not_found,
-    add_sub_issues_response,
+    make_ctx,
+    patch_ctx_query,
+    remove_issues_from_sprints_response,
     remove_sub_issues_response,
     reprioritize_sub_issue_response,
+    sprint_header_null,
+    sprint_header_response,
+    sprint_issue_wrapper,
+    sprint_issues_null_node,
+    sprint_issues_page,
     sprint_node,
     sprints_page,
-    sprint_header_response,
-    sprint_header_null,
-    sprint_issue_wrapper,
-    sprint_issues_page,
-    sprint_issues_null_node,
-    add_issues_to_sprints_response,
-    remove_issues_from_sprints_response,
+    subissue_list_response,
+    subissue_parent_not_found,
 )
 
-
-# =============================================================================
-# `list_sub_issues`
-# =============================================================================
 
 class TestListSubIssues:
     """Verb: list_sub_issues(parent_number) — sub-issue listing."""
@@ -62,12 +56,18 @@ class TestListSubIssues:
     def test_happy_path_returns_documented_shape(self):
         """Single-page listing returns ok=True with children populated."""
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            subissue_list_response(parent_number=42, nodes=[
-                child_node(100, title="Add tests"),
-                child_node(101, title="Fix bug"),
-            ]),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                subissue_list_response(
+                    parent_number=42,
+                    nodes=[
+                        child_node(100, title="Add tests"),
+                        child_node(101, title="Fix bug"),
+                    ],
+                ),
+            ],
+        ):
             out = zh_graphql_ops.list_sub_issues(ctx, 42)
         assert out["ok"] is True
         assert out["parent_number"] == 42
@@ -82,10 +82,15 @@ class TestListSubIssues:
         with patch_ctx_query(ctx, [subissue_parent_not_found()]):
             out = zh_graphql_ops.list_sub_issues(ctx, 999)
         assert out["ok"] is False
-        # Full documented key set even on the not-found path
-        for key in ("parent_number", "parent_title", "parent_state",
-                    "total_count", "fetched_count", "children",
-                    "pagination_warning"):
+        for key in (
+            "parent_number",
+            "parent_title",
+            "parent_state",
+            "total_count",
+            "fetched_count",
+            "children",
+            "pagination_warning",
+        ):
             assert key in out, f"missing key: {key}"
         assert out["children"] == []
 
@@ -94,31 +99,39 @@ class TestListSubIssues:
         downstream tools (reorder anchor lookup, repo filtering) can
         disambiguate same-numbered siblings."""
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            subissue_list_response(nodes=[
-                child_node(50, owner="acme", repo="widgets"),
-                child_node(50, owner="acme", repo="gadgets"),
-            ]),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                subissue_list_response(
+                    nodes=[
+                        child_node(50, owner="acme", repo="widgets"),
+                        child_node(50, owner="acme", repo="gadgets"),
+                    ]
+                ),
+            ],
+        ):
             out = zh_graphql_ops.list_sub_issues(ctx, 42)
-        repos = [(c["repository"]["owner"], c["repository"]["name"])
-                 for c in out["children"]]
+        repos = [(c["repository"]["owner"], c["repository"]["name"]) for c in out["children"]]
         assert ("acme", "widgets") in repos
         assert ("acme", "gadgets") in repos
 
     def test_pagination_walks_until_has_next_false(self):
         """Multi-page walk concatenates all pages until hasNextPage."""
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            subissue_list_response(
-                nodes=[child_node(100)],
-                has_next=True, end_cursor="cur1",
-            ),
-            subissue_list_response(
-                nodes=[child_node(101)],
-                has_next=False,
-            ),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                subissue_list_response(
+                    nodes=[child_node(100)],
+                    has_next=True,
+                    end_cursor="cur1",
+                ),
+                subissue_list_response(
+                    nodes=[child_node(101)],
+                    has_next=False,
+                ),
+            ],
+        ):
             out = zh_graphql_ops.list_sub_issues(ctx, 42)
         assert out["fetched_count"] == 2
         assert out["pagination_warning"] is None
@@ -128,7 +141,8 @@ class TestListSubIssues:
         ctx = make_ctx()
         stuck = subissue_list_response(
             nodes=[child_node(100)],
-            has_next=True, end_cursor=None,
+            has_next=True,
+            end_cursor=None,
         )
         with patch_ctx_query(ctx, [stuck, stuck]):
             out = zh_graphql_ops.list_sub_issues(ctx, 42)
@@ -169,10 +183,6 @@ class TestListSubIssues:
         assert 100 in nums
 
 
-# =============================================================================
-# `add_sub_issues`
-# =============================================================================
-
 class TestAddSubIssues:
     """Verb: add_sub_issues(parent_number, child_numbers) — link sub-issues."""
 
@@ -186,12 +196,15 @@ class TestAddSubIssues:
 
     def test_happy_path_returns_documented_shape(self):
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            self._parent(42),
-            self._child(100),
-            self._child(101),
-            add_sub_issues_response(success_count=2),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                self._parent(42),
+                self._child(100),
+                self._child(101),
+                add_sub_issues_response(success_count=2),
+            ],
+        ):
             out = zh_graphql_ops.add_sub_issues(ctx, 42, [100, 101])
         assert out["ok"] is True
         assert out["outcome"] == "ok"
@@ -207,19 +220,24 @@ class TestAddSubIssues:
 
     def test_partial_failure_splits_succeeded_and_failed(self):
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            self._parent(42),
-            self._child(100),
-            self._child(101),
-            self._child(102),
-            add_sub_issues_response(
-                success_count=2,
-                failed=[{
-                    "number": 102,
-                    "repository": {"ownerName": "acme", "name": "widgets"},
-                }],
-            ),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                self._parent(42),
+                self._child(100),
+                self._child(101),
+                self._child(102),
+                add_sub_issues_response(
+                    success_count=2,
+                    failed=[
+                        {
+                            "number": 102,
+                            "repository": {"ownerName": "acme", "name": "widgets"},
+                        }
+                    ],
+                ),
+            ],
+        ):
             out = zh_graphql_ops.add_sub_issues(ctx, 42, [100, 101, 102])
         assert out["outcome"] == "partial"
         assert sorted(out["succeeded"]) == [100, 101]
@@ -228,9 +246,12 @@ class TestAddSubIssues:
     def test_null_parent_returns_fail_outcome(self):
         """Parent lookup returns None → outcome=fail, no mutation fires."""
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            {"data": {"issueByInfo": None}},  # parent not found
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                {"data": {"issueByInfo": None}},  # parent not found
+            ],
+        ):
             out = zh_graphql_ops.add_sub_issues(ctx, 9999, [100])
         assert out["ok"] is False
         assert out["outcome"] == "fail"
@@ -239,11 +260,14 @@ class TestAddSubIssues:
     def test_null_child_returns_fail_outcome(self):
         """Any child not found → fail before mutation."""
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            self._parent(42),
-            self._child(100),
-            issue_not_found_response(),  # 9999 not found
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                self._parent(42),
+                self._child(100),
+                issue_not_found_response(),  # 9999 not found
+            ],
+        ):
             out = zh_graphql_ops.add_sub_issues(ctx, 42, [100, 9999])
         assert out["ok"] is False
         assert out["outcome"] == "fail"
@@ -260,26 +284,25 @@ class TestAddSubIssues:
         the same way the sprint mutations do (round-2 #10).
         """
         ctx = make_ctx()
-        # Pre-flight resolution only needs to lookup unique children:
-        # if it doesn't dedup, 5 child lookups will be queued, and the
-        # patch_ctx_query iterator runs out and the test crashes with
-        # a clear StopIteration (which IS the bug surfaced).
-        with patch_ctx_query(ctx, [
-            self._parent(42),
-            self._child(100),
-            self._child(101),
-            add_sub_issues_response(success_count=2),
-        ]):
+        # Pre-flight resolution only needs to lookup unique children: if it doesn't dedup, 5 child lookups will be queued, and the patch_ctx_query
+        # iterator runs out and the test crashes with a clear StopIteration (which IS the bug surfaced).
+        with patch_ctx_query(
+            ctx,
+            [
+                self._parent(42),
+                self._child(100),
+                self._child(101),
+                add_sub_issues_response(success_count=2),
+            ],
+        ):
             out = zh_graphql_ops.add_sub_issues(
-                ctx, 42, [100, 100, 101, 100],
+                ctx,
+                42,
+                [100, 100, 101, 100],
             )
         assert out["success_count"] == 2
         assert sorted(out["succeeded"]) == [100, 101]
 
-
-# =============================================================================
-# `remove_sub_issues`
-# =============================================================================
 
 class TestRemoveSubIssues:
     """Verb: remove_sub_issues(parent_number, child_numbers) — unlink."""
@@ -298,12 +321,15 @@ class TestRemoveSubIssues:
     def test_happy_path(self):
         ctx = make_ctx()
         parent = self._parent_node_for_child(42)
-        with patch_ctx_query(ctx, [
-            issue_by_info_response(42),
-            issue_by_info_response(100, parent=parent),
-            issue_by_info_response(101, parent=parent),
-            remove_sub_issues_response(success_count=2),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                issue_by_info_response(42),
+                issue_by_info_response(100, parent=parent),
+                issue_by_info_response(101, parent=parent),
+                remove_sub_issues_response(success_count=2),
+            ],
+        ):
             out = zh_graphql_ops.remove_sub_issues(ctx, 42, [100, 101])
         assert out["ok"] is True
         assert sorted(out["succeeded"]) == [100, 101]
@@ -317,10 +343,13 @@ class TestRemoveSubIssues:
         """Child whose parentIssue is NOT us — pre-flight catches."""
         ctx = make_ctx()
         wrong_parent = self._parent_node_for_child(99)  # wrong number
-        with patch_ctx_query(ctx, [
-            issue_by_info_response(42),
-            issue_by_info_response(100, parent=wrong_parent),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                issue_by_info_response(42),
+                issue_by_info_response(100, parent=wrong_parent),
+            ],
+        ):
             out = zh_graphql_ops.remove_sub_issues(ctx, 42, [100])
         assert out["ok"] is False
         assert out["outcome"] == "fail"
@@ -329,10 +358,13 @@ class TestRemoveSubIssues:
     def test_orphan_child_caught_preflight(self):
         """Child with no parentIssue at all (not a sub-issue) — fail."""
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            issue_by_info_response(42),
-            issue_by_info_response(100, parent=None),  # orphan
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                issue_by_info_response(42),
+                issue_by_info_response(100, parent=None),  # orphan
+            ],
+        ):
             out = zh_graphql_ops.remove_sub_issues(ctx, 42, [100])
         assert out["ok"] is False
         assert out["outcome"] == "fail"
@@ -342,9 +374,12 @@ class TestRemoveSubIssues:
 
     def test_null_parent_returns_fail(self):
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            {"data": {"issueByInfo": None}},  # parent #9999 not found
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                {"data": {"issueByInfo": None}},  # parent #9999 not found
+            ],
+        ):
             out = zh_graphql_ops.remove_sub_issues(ctx, 9999, [100])
         assert out["ok"] is False
         assert out["outcome"] == "fail"
@@ -353,12 +388,18 @@ class TestRemoveSubIssues:
         """Child in sibling repo (acme/gadgets) — pre-flight catches."""
         ctx = make_ctx()  # owner_repo="acme/widgets"
         parent = self._parent_node_for_child(42)
-        with patch_ctx_query(ctx, [
-            issue_by_info_response(42),
-            issue_by_info_response(
-                100, parent=parent, owner="acme", repo="gadgets",
-            ),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                issue_by_info_response(42),
+                issue_by_info_response(
+                    100,
+                    parent=parent,
+                    owner="acme",
+                    repo="gadgets",
+                ),
+            ],
+        ):
             out = zh_graphql_ops.remove_sub_issues(ctx, 42, [100])
         assert out["ok"] is False
         assert "cross-repo" in (out["error"] or "").lower()
@@ -368,21 +409,28 @@ class TestRemoveSubIssues:
         split succeeded vs failed by what the API returned."""
         ctx = make_ctx()
         parent = self._parent_node_for_child(42)
-        with patch_ctx_query(ctx, [
-            issue_by_info_response(42),
-            issue_by_info_response(100, parent=parent),
-            issue_by_info_response(101, parent=parent),
-            issue_by_info_response(102, parent=parent),
-            remove_sub_issues_response(
-                success_count=2,
-                failed=[{
-                    "number": 102,
-                    "repository": {"ownerName": "acme", "name": "widgets"},
-                }],
-            ),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                issue_by_info_response(42),
+                issue_by_info_response(100, parent=parent),
+                issue_by_info_response(101, parent=parent),
+                issue_by_info_response(102, parent=parent),
+                remove_sub_issues_response(
+                    success_count=2,
+                    failed=[
+                        {
+                            "number": 102,
+                            "repository": {"ownerName": "acme", "name": "widgets"},
+                        }
+                    ],
+                ),
+            ],
+        ):
             out = zh_graphql_ops.remove_sub_issues(
-                ctx, 42, [100, 101, 102],
+                ctx,
+                42,
+                [100, 101, 102],
             )
         assert out["outcome"] == "partial"
         assert sorted(out["succeeded"]) == [100, 101]
@@ -393,22 +441,23 @@ class TestRemoveSubIssues:
         the same way add_sub_issues does — same matrix cell."""
         ctx = make_ctx()
         parent = self._parent_node_for_child(42)
-        with patch_ctx_query(ctx, [
-            issue_by_info_response(42),
-            issue_by_info_response(100, parent=parent),
-            issue_by_info_response(101, parent=parent),
-            remove_sub_issues_response(success_count=2),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                issue_by_info_response(42),
+                issue_by_info_response(100, parent=parent),
+                issue_by_info_response(101, parent=parent),
+                remove_sub_issues_response(success_count=2),
+            ],
+        ):
             out = zh_graphql_ops.remove_sub_issues(
-                ctx, 42, [100, 100, 101],
+                ctx,
+                42,
+                [100, 100, 101],
             )
         assert out["success_count"] == 2
         assert sorted(out["succeeded"]) == [100, 101]
 
-
-# =============================================================================
-# `reorder_sub_issue`
-# =============================================================================
 
 class TestReorderSubIssue:
     """Verb: reorder_sub_issue(child, position, sibling_number=None)."""
@@ -425,21 +474,27 @@ class TestReorderSubIssue:
     def test_happy_top_anchor_uses_first_other_sibling(self):
         ctx = make_ctx()
         parent = self._parent_node(42)
-        with patch_ctx_query(ctx, [
-            # child lookup
-            issue_by_info_response(
-                100,
-                issue_id="issue-gid-100",
-                parent=parent,
-            ),
-            # sibling listing
-            subissue_list_response(parent_number=42, nodes=[
-                child_node(101, node_id="issue-gid-101"),
-                child_node(100, node_id="issue-gid-100"),
-            ]),
-            # mutation success
-            reprioritize_sub_issue_response(success=True),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                # child lookup
+                issue_by_info_response(
+                    100,
+                    issue_id="issue-gid-100",
+                    parent=parent,
+                ),
+                # sibling listing
+                subissue_list_response(
+                    parent_number=42,
+                    nodes=[
+                        child_node(101, node_id="issue-gid-101"),
+                        child_node(100, node_id="issue-gid-100"),
+                    ],
+                ),
+                # mutation success
+                reprioritize_sub_issue_response(success=True),
+            ],
+        ):
             out = zh_graphql_ops.reorder_sub_issue(ctx, 100, "top")
         assert out["ok"] is True
         assert out["outcome"] == "ok"
@@ -447,12 +502,18 @@ class TestReorderSubIssue:
     def test_only_child_returns_noop(self):
         ctx = make_ctx()
         parent = self._parent_node(42)
-        with patch_ctx_query(ctx, [
-            issue_by_info_response(100, parent=parent),
-            subissue_list_response(parent_number=42, nodes=[
-                child_node(100, node_id="issue-gid-100"),
-            ]),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                issue_by_info_response(100, parent=parent),
+                subissue_list_response(
+                    parent_number=42,
+                    nodes=[
+                        child_node(100, node_id="issue-gid-100"),
+                    ],
+                ),
+            ],
+        ):
             out = zh_graphql_ops.reorder_sub_issue(ctx, 100, "top")
         assert out["outcome"] == "noop"
         assert out["ok"] is False
@@ -461,31 +522,43 @@ class TestReorderSubIssue:
         ctx = make_ctx()
         with pytest.raises(zh_api.ZhApiError):
             zh_graphql_ops.reorder_sub_issue(
-                ctx, 100, "after", sibling_number=100,
+                ctx,
+                100,
+                "after",
+                sibling_number=100,
             )
 
     def test_self_anchor_before_raises(self):
         ctx = make_ctx()
         with pytest.raises(zh_api.ZhApiError):
             zh_graphql_ops.reorder_sub_issue(
-                ctx, 100, "before", sibling_number=100,
+                ctx,
+                100,
+                "before",
+                sibling_number=100,
             )
 
     def test_orphan_child_returns_fail(self):
         """Child not a sub-issue — no parent to reorder under."""
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            issue_by_info_response(100, parent=None),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                issue_by_info_response(100, parent=None),
+            ],
+        ):
             out = zh_graphql_ops.reorder_sub_issue(ctx, 100, "top")
         assert out["ok"] is False
         assert out["outcome"] == "fail"
 
     def test_child_not_found_returns_fail(self):
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            {"data": {"issueByInfo": None}},
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                {"data": {"issueByInfo": None}},
+            ],
+        ):
             out = zh_graphql_ops.reorder_sub_issue(ctx, 9999, "top")
         assert out["ok"] is False
         assert out["outcome"] == "fail"
@@ -495,18 +568,21 @@ class TestReorderSubIssue:
         siblings are valid anchors. (Round-2 review #2 fix.)"""
         ctx = make_ctx()  # owner_repo="acme/widgets"
         parent = self._parent_node(42)
-        with patch_ctx_query(ctx, [
-            issue_by_info_response(100, issue_id="issue-gid-100",
-                                   parent=parent),
-            # Cross-repo sibling: same number (100) in acme/gadgets
-            subissue_list_response(parent_number=42, nodes=[
-                child_node(100, node_id="issue-gid-100-gadgets",
-                           owner="acme", repo="gadgets"),
-                child_node(100, node_id="issue-gid-100",
-                           owner="acme", repo="widgets"),
-            ]),
-            reprioritize_sub_issue_response(success=True),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                issue_by_info_response(100, issue_id="issue-gid-100", parent=parent),
+                # Cross-repo sibling: same number (100) in acme/gadgets
+                subissue_list_response(
+                    parent_number=42,
+                    nodes=[
+                        child_node(100, node_id="issue-gid-100-gadgets", owner="acme", repo="gadgets"),
+                        child_node(100, node_id="issue-gid-100", owner="acme", repo="widgets"),
+                    ],
+                ),
+                reprioritize_sub_issue_response(success=True),
+            ],
+        ):
             out = zh_graphql_ops.reorder_sub_issue(ctx, 100, "top")
         # The first sibling in the listing has a different gid (it's
         # the gadgets-repo #100), so "first other" matches it.
@@ -522,44 +598,48 @@ class TestReorderSubIssue:
         """
         ctx = make_ctx()
         parent = self._parent_node(42)
-        with patch_ctx_query(ctx, [
-            issue_by_info_response(100, issue_id="issue-gid-100",
-                                   parent=parent),
-            # Sibling listing bails on stuck cursor — coverage is
-            # partial.
-            subissue_list_response(
-                parent_number=42,
-                nodes=[
-                    child_node(100, node_id="issue-gid-100"),
-                    child_node(101, node_id="issue-gid-101"),
-                ],
-                has_next=True, end_cursor=None,  # stuck cursor
-            ),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                issue_by_info_response(100, issue_id="issue-gid-100", parent=parent),
+                # Sibling listing bails on stuck cursor — coverage is
+                # partial.
+                subissue_list_response(
+                    parent_number=42,
+                    nodes=[
+                        child_node(100, node_id="issue-gid-100"),
+                        child_node(101, node_id="issue-gid-101"),
+                    ],
+                    has_next=True,
+                    end_cursor=None,  # stuck cursor
+                ),
+            ],
+        ):
             out = zh_graphql_ops.reorder_sub_issue(ctx, 100, "top")
         assert out["ok"] is False
         assert out["outcome"] == "fail"
         err = (out.get("error") or "").lower()
-        assert "partial pagination" in err, (
-            f"expected partial-pagination message; got: {err!r}"
-        )
+        assert "partial pagination" in err, f"expected partial-pagination message; got: {err!r}"
 
     def test_reorder_bottom_refuses_under_partial_walk(self):
         """Round-6 #5 — same SPEC for bottom."""
         ctx = make_ctx()
         parent = self._parent_node(42)
-        with patch_ctx_query(ctx, [
-            issue_by_info_response(100, issue_id="issue-gid-100",
-                                   parent=parent),
-            subissue_list_response(
-                parent_number=42,
-                nodes=[
-                    child_node(100, node_id="issue-gid-100"),
-                    child_node(101, node_id="issue-gid-101"),
-                ],
-                has_next=True, end_cursor=None,
-            ),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                issue_by_info_response(100, issue_id="issue-gid-100", parent=parent),
+                subissue_list_response(
+                    parent_number=42,
+                    nodes=[
+                        child_node(100, node_id="issue-gid-100"),
+                        child_node(101, node_id="issue-gid-101"),
+                    ],
+                    has_next=True,
+                    end_cursor=None,
+                ),
+            ],
+        ):
             out = zh_graphql_ops.reorder_sub_issue(ctx, 100, "bottom")
         assert out["ok"] is False
         assert "partial pagination" in (out.get("error") or "").lower()
@@ -573,43 +653,53 @@ class TestReorderSubIssue:
         """
         ctx = make_ctx()
         parent = self._parent_node(42)
-        with patch_ctx_query(ctx, [
-            issue_by_info_response(100, issue_id="issue-gid-100",
-                                   parent=parent),
-            # Anchor #101 is in the partial set — the partial walk
-            # is fine for an explicit-anchor lookup.
-            subissue_list_response(
-                parent_number=42,
-                nodes=[
-                    child_node(100, node_id="issue-gid-100"),
-                    child_node(101, node_id="issue-gid-101"),
-                ],
-                has_next=True, end_cursor=None,  # stuck cursor
-            ),
-            reprioritize_sub_issue_response(success=True),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                issue_by_info_response(100, issue_id="issue-gid-100", parent=parent),
+                # Anchor #101 is in the partial set — the partial walk
+                # is fine for an explicit-anchor lookup.
+                subissue_list_response(
+                    parent_number=42,
+                    nodes=[
+                        child_node(100, node_id="issue-gid-100"),
+                        child_node(101, node_id="issue-gid-101"),
+                    ],
+                    has_next=True,
+                    end_cursor=None,  # stuck cursor
+                ),
+                reprioritize_sub_issue_response(success=True),
+            ],
+        ):
             out = zh_graphql_ops.reorder_sub_issue(
-                ctx, 100, "after", sibling_number=101,
+                ctx,
+                100,
+                "after",
+                sibling_number=101,
             )
         assert out["ok"] is True
         assert out["outcome"] == "ok"
 
 
-# =============================================================================
-# `list_sprints`
-# =============================================================================
-
 class TestListSprints:
     def test_happy_open_only_marks_active(self):
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            sprints_page([
-                sprint_node("sprint-7", "Sprint 7"),
-                sprint_node("sprint-8", "Sprint 8",
+        with patch_ctx_query(
+            ctx,
+            [
+                sprints_page(
+                    [
+                        sprint_node("sprint-7", "Sprint 7"),
+                        sprint_node(
+                            "sprint-8",
+                            "Sprint 8",
                             start="2026-05-15T00:00:00Z",
-                            end="2026-05-29T00:00:00Z"),
-            ]),
-        ]):
+                            end="2026-05-29T00:00:00Z",
+                        ),
+                    ]
+                ),
+            ],
+        ):
             out = zh_graphql_ops.list_sprints(ctx)
         assert out["ok"] is True
         assert out["active_sprint_id"] == "sprint-7"
@@ -618,10 +708,12 @@ class TestListSprints:
 
     def test_empty_workspace(self):
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            sprints_page([], active_sprint_id=None,
-                         workspace_name="Empty"),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                sprints_page([], active_sprint_id=None, workspace_name="Empty"),
+            ],
+        ):
             out = zh_graphql_ops.list_sprints(ctx)
         assert out["ok"] is True
         assert out["sprints"] == []
@@ -629,16 +721,20 @@ class TestListSprints:
 
     def test_walks_pagination(self):
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            sprints_page(
-                [sprint_node(f"s-{i}", f"S{i}") for i in range(50)],
-                has_next=True, end_cursor="cur1",
-            ),
-            sprints_page(
-                [sprint_node("s-old", "S Old")],
-                has_next=False,
-            ),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                sprints_page(
+                    [sprint_node(f"s-{i}", f"S{i}") for i in range(50)],
+                    has_next=True,
+                    end_cursor="cur1",
+                ),
+                sprints_page(
+                    [sprint_node("s-old", "S Old")],
+                    has_next=False,
+                ),
+            ],
+        ):
             out = zh_graphql_ops.list_sprints(ctx)
         names = {s["name"] for s in out["sprints"]}
         assert "S Old" in names
@@ -648,7 +744,8 @@ class TestListSprints:
         ctx = make_ctx()
         stuck = sprints_page(
             [sprint_node("s-1", "S1")],
-            has_next=True, end_cursor=None,
+            has_next=True,
+            end_cursor=None,
         )
         with patch_ctx_query(ctx, [stuck, stuck]):
             out = zh_graphql_ops.list_sprints(ctx)
@@ -661,18 +758,18 @@ class TestListSprints:
         a real empty workspace and lets downstream callers misbehave.
         """
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            {"data": {"workspace": None}},
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                {"data": {"workspace": None}},
+            ],
+        ):
             # Either raises or returns ok=False; not silent ok=True/[].
             try:
                 out = zh_graphql_ops.list_sprints(ctx)
             except zh_api.ZhApiError:
                 return  # acceptable: hard fail
-        assert out["ok"] is False, (
-            "list_sprints returned ok=True for a null workspace, "
-            "which silently looks like an empty-but-real workspace"
-        )
+        assert out["ok"] is False, "list_sprints returned ok=True for a null workspace, which silently looks like an empty-but-real workspace"
 
     def test_null_page_entry_does_not_crash(self):
         """SPEC: a `sprints.nodes: [None, real_sprint]` page must skip
@@ -690,18 +787,17 @@ class TestListSprints:
         assert "Sprint 7" in names
 
 
-# =============================================================================
-# `get_sprint_detail`
-# =============================================================================
-
 class TestGetSprintDetail:
     def test_happy_path(self):
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            sprints_page([sprint_node("sprint-7", "Sprint 7")]),
-            sprint_header_response(),
-            sprint_issues_page([sprint_issue_wrapper(100)]),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                sprints_page([sprint_node("sprint-7", "Sprint 7")]),
+                sprint_header_response(),
+                sprint_issues_page([sprint_issue_wrapper(100)]),
+            ],
+        ):
             out = zh_graphql_ops.get_sprint_detail(ctx, "Sprint 7")
         assert out["ok"] is True
         assert out["sprint_id"] == "sprint-7"
@@ -709,19 +805,25 @@ class TestGetSprintDetail:
 
     def test_current_alias(self):
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            sprints_page([sprint_node("sprint-7", "Sprint 7")]),
-            sprint_header_response(),
-            sprint_issues_page([]),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                sprints_page([sprint_node("sprint-7", "Sprint 7")]),
+                sprint_header_response(),
+                sprint_issues_page([]),
+            ],
+        ):
             out = zh_graphql_ops.get_sprint_detail(ctx, "current")
         assert out["sprint_id"] == "sprint-7"
 
     def test_unknown_name_returns_fail(self):
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            sprints_page([sprint_node("sprint-7", "Sprint 7")]),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                sprints_page([sprint_node("sprint-7", "Sprint 7")]),
+            ],
+        ):
             out = zh_graphql_ops.get_sprint_detail(ctx, "No Such Sprint")
         assert out["ok"] is False
         assert "not found" in (out["error"] or "").lower()
@@ -735,19 +837,20 @@ class TestGetSprintDetail:
         """
         ctx = make_ctx()
         # Page 1 has Sprint 7, then bails on stuck cursor.
-        with patch_ctx_query(ctx, [
-            sprints_page(
-                [sprint_node("sprint-7", "Sprint 7")],
-                has_next=True, end_cursor=None,  # stuck cursor
-            ),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                sprints_page(
+                    [sprint_node("sprint-7", "Sprint 7")],
+                    has_next=True,
+                    end_cursor=None,  # stuck cursor
+                ),
+            ],
+        ):
             out = zh_graphql_ops.get_sprint_detail(ctx, "Sprint 99")
         assert out["ok"] is False
         err = (out["error"] or "").lower()
-        assert "incomplete" in err, (
-            f"expected 'incomplete' in error to flag the partial walk; "
-            f"got: {err!r}"
-        )
+        assert "incomplete" in err, f"expected 'incomplete' in error to flag the partial walk; got: {err!r}"
         # Mention the bail reason so the user can decide what to do
         assert "stuck_cursor" in err or "cursor" in err
 
@@ -755,12 +858,15 @@ class TestGetSprintDetail:
         ctx = make_ctx()
         page1 = [sprint_issue_wrapper(i) for i in range(1, 101)]
         page2 = [sprint_issue_wrapper(101)]
-        with patch_ctx_query(ctx, [
-            sprints_page([sprint_node("sprint-7", "Sprint 7")]),
-            sprint_header_response(),
-            sprint_issues_page(page1, has_next=True, end_cursor="cur1"),
-            sprint_issues_page(page2, has_next=False),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                sprints_page([sprint_node("sprint-7", "Sprint 7")]),
+                sprint_header_response(),
+                sprint_issues_page(page1, has_next=True, end_cursor="cur1"),
+                sprint_issues_page(page2, has_next=False),
+            ],
+        ):
             out = zh_graphql_ops.get_sprint_detail(ctx, "current")
         assert out["issue_count"] == 101
 
@@ -779,22 +885,22 @@ class TestGetSprintDetail:
         never silent ok=True") is actually enforceable.
         """
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            sprints_page([sprint_node("sprint-7", "Sprint 7")]),
-            sprint_header_null(),
-            # If the implementation doesn't raise, it must walk; supply
-            # a walker response so the test doesn't blow up on
-            # StopIteration AFTER missing the assertion below.
-            sprint_issues_null_node(),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                sprints_page([sprint_node("sprint-7", "Sprint 7")]),
+                sprint_header_null(),
+                # If the implementation doesn't raise, it must walk; supply a walker response so the test doesn't blow up on
+                # StopIteration AFTER missing the assertion below.
+                sprint_issues_null_node(),
+            ],
+        ):
             try:
                 out = zh_graphql_ops.get_sprint_detail(ctx, "current")
             except zh_api.ZhApiError:
                 return  # SPEC: raising loudly is acceptable
         assert out["ok"] is False, (
-            "get_sprint_detail returned ok=True for a null sprint "
-            "header — SPEC says raise ZhApiError OR return ok=False, "
-            "never silent success"
+            "get_sprint_detail returned ok=True for a null sprint header — SPEC says raise ZhApiError OR return ok=False, never silent success"
         )
 
     def test_walker_null_node_in_detail_path_raises(self):
@@ -802,13 +908,18 @@ class TestGetSprintDetail:
         must propagate to get_sprint_detail rather than silently
         returning a sprint with no issues."""
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            sprints_page([sprint_node("sprint-7", "Sprint 7")]),
-            sprint_header_response(),
-            sprint_issues_null_node(),
-        ]):
-            with pytest.raises(zh_api.ZhApiError):
-                zh_graphql_ops.get_sprint_detail(ctx, "current")
+        with (
+            patch_ctx_query(
+                ctx,
+                [
+                    sprints_page([sprint_node("sprint-7", "Sprint 7")]),
+                    sprint_header_response(),
+                    sprint_issues_null_node(),
+                ],
+            ),
+            pytest.raises(zh_api.ZhApiError),
+        ):
+            zh_graphql_ops.get_sprint_detail(ctx, "current")
 
     def test_null_issue_wrapper_skipped(self):
         """SPEC: a sprintIssues page containing `[None, {"issue": ...}]`
@@ -825,37 +936,34 @@ class TestGetSprintDetail:
         or {}` coalesced None to `{}` and still leaked a phantom.
         """
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            sprints_page([sprint_node("sprint-7", "Sprint 7")]),
-            sprint_header_response(),
-            # Two phantom shapes: wrapper=None AND wrapper={"issue": None}
-            sprint_issues_page([
-                None,
-                {"issue": None},  # round-6 #6 phantom shape
-                sprint_issue_wrapper(100),
-            ]),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                sprints_page([sprint_node("sprint-7", "Sprint 7")]),
+                sprint_header_response(),
+                # Two phantom shapes: wrapper=None AND wrapper={"issue": None}
+                sprint_issues_page(
+                    [
+                        None,
+                        {"issue": None},  # round-6 #6 phantom shape
+                        sprint_issue_wrapper(100),
+                    ]
+                ),
+            ],
+        ):
             out = zh_graphql_ops.get_sprint_detail(ctx, "current")
         assert out["ok"] is True
         nums = [i["number"] for i in out["issues"]]
         assert 100 in nums
-        # SPEC tightening: there should be exactly ONE issue (#100).
-        # A phantom record from the None wrapper OR the null-issue
-        # wrapper would show up as extra entries. Pin that no
-        # phantom is emitted from either shape.
-        assert out["issue_count"] == 1, (
-            f"phantom record leaked: issues={out['issues']!r}"
-        )
+        # SPEC tightening: there should be exactly ONE issue (#100). A phantom record from the None wrapper OR the null-issue wrapper would
+        # show up as extra entries. Pin that no phantom is emitted from either shape.
+        assert out["issue_count"] == 1, f"phantom record leaked: issues={out['issues']!r}"
         # Belt-and-suspenders: every emitted issue must have a valid
         # int number AND a non-empty repository (round-6 #6 SPEC).
         for i in out["issues"]:
-            assert isinstance(i["number"], int), (
-                f"non-int number leaked from null wrapper: {i!r}"
-            )
+            assert isinstance(i["number"], int), f"non-int number leaked from null wrapper: {i!r}"
             rep = i.get("repository") or {}
-            assert rep.get("owner") or rep.get("name"), (
-                f"phantom record with empty repo leaked: {i!r}"
-            )
+            assert rep.get("owner") or rep.get("name"), f"phantom record with empty repo leaked: {i!r}"
 
     def test_null_pipeline_node_entry_does_not_crash(self):
         """SPEC: `pipelineIssues.nodes[0]` can be null defensively.
@@ -874,39 +982,43 @@ class TestGetSprintDetail:
                 "pipelineIssues": {"nodes": [None]},
             }
         }
-        with patch_ctx_query(ctx, [
-            sprints_page([sprint_node("sprint-7", "Sprint 7")]),
-            sprint_header_response(),
-            sprint_issues_page([bad_issue_wrapper]),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                sprints_page([sprint_node("sprint-7", "Sprint 7")]),
+                sprint_header_response(),
+                sprint_issues_page([bad_issue_wrapper]),
+            ],
+        ):
             out = zh_graphql_ops.get_sprint_detail(ctx, "current")
         # Should not crash; pipeline should fall back to None.
         assert out["ok"] is True
         assert out["issues"][0]["pipeline"] is None
 
 
-# =============================================================================
-# `get_current_sprint`
-# =============================================================================
-
 class TestGetCurrentSprint:
     def test_happy_path(self):
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            sprints_page([sprint_node("sprint-7", "Sprint 7")]),
-            sprint_header_response(),
-            sprint_issues_page([]),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                sprints_page([sprint_node("sprint-7", "Sprint 7")]),
+                sprint_header_response(),
+                sprint_issues_page([]),
+            ],
+        ):
             out = zh_graphql_ops.get_current_sprint(ctx)
         assert out["ok"] is True
         assert out["sprint_id"] == "sprint-7"
 
     def test_no_active_sprint(self):
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            sprints_page([], active_sprint_id=None,
-                         workspace_name="Quiet"),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                sprints_page([], active_sprint_id=None, workspace_name="Quiet"),
+            ],
+        ):
             out = zh_graphql_ops.get_current_sprint(ctx)
         assert out["ok"] is False
         assert "no active sprint" in (out["error"] or "").lower()
@@ -916,9 +1028,12 @@ class TestGetCurrentSprint:
         `list_sprints`. A null workspace must surface as a failure,
         not silent ok=True with no issues."""
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            {"data": {"workspace": None}},
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                {"data": {"workspace": None}},
+            ],
+        ):
             # Either raises (preferred) or returns ok=False
             try:
                 out = zh_graphql_ops.get_current_sprint(ctx)
@@ -927,24 +1042,27 @@ class TestGetCurrentSprint:
         assert out["ok"] is False
 
 
-# =============================================================================
-# `add_issues_to_sprint`
-# =============================================================================
-
 class TestAddIssuesToSprint:
     def test_happy_path(self):
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            sprints_page([sprint_node("sprint-7", "Sprint 7")]),
-            issue_by_info_response(100),
-            issue_by_info_response(101),
-            add_issues_to_sprints_response(linked=[
-                (100, "acme", "widgets"),
-                (101, "acme", "widgets"),
-            ]),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                sprints_page([sprint_node("sprint-7", "Sprint 7")]),
+                issue_by_info_response(100),
+                issue_by_info_response(101),
+                add_issues_to_sprints_response(
+                    linked=[
+                        (100, "acme", "widgets"),
+                        (101, "acme", "widgets"),
+                    ]
+                ),
+            ],
+        ):
             out = zh_graphql_ops.add_issues_to_sprint(
-                ctx, "Sprint 7", [100, 101],
+                ctx,
+                "Sprint 7",
+                [100, 101],
             )
         assert out["ok"] is True
         assert sorted(out["succeeded"]) == [100, 101]
@@ -956,17 +1074,24 @@ class TestAddIssuesToSprint:
 
     def test_partial_fail(self):
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            sprints_page([sprint_node("sprint-7", "Sprint 7")]),
-            issue_by_info_response(100),
-            issue_by_info_response(101),
-            issue_by_info_response(102),
-            add_issues_to_sprints_response(linked=[
-                (100, "acme", "widgets"),
-            ]),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                sprints_page([sprint_node("sprint-7", "Sprint 7")]),
+                issue_by_info_response(100),
+                issue_by_info_response(101),
+                issue_by_info_response(102),
+                add_issues_to_sprints_response(
+                    linked=[
+                        (100, "acme", "widgets"),
+                    ]
+                ),
+            ],
+        ):
             out = zh_graphql_ops.add_issues_to_sprint(
-                ctx, "Sprint 7", [100, 101, 102],
+                ctx,
+                "Sprint 7",
+                [100, 101, 102],
             )
         assert out["outcome"] == "partial"
         assert out["succeeded"] == [100]
@@ -974,28 +1099,40 @@ class TestAddIssuesToSprint:
 
     def test_sprint_not_found(self):
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            sprints_page([sprint_node("sprint-7", "Sprint 7")]),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                sprints_page([sprint_node("sprint-7", "Sprint 7")]),
+            ],
+        ):
             out = zh_graphql_ops.add_issues_to_sprint(
-                ctx, "No Such Sprint", [100],
+                ctx,
+                "No Such Sprint",
+                [100],
             )
         assert out["ok"] is False
         assert "not found" in (out["error"] or "").lower()
 
     def test_multi_repo_filters_response_by_ctx_repo(self):
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            sprints_page([sprint_node("sprint-7", "Sprint 7")]),
-            issue_by_info_response(42),
-            # API returns a link for OUR #42 AND a sibling-repo #42
-            add_issues_to_sprints_response(linked=[
-                (42, "acme", "widgets"),
-                (42, "acme", "gadgets"),
-            ]),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                sprints_page([sprint_node("sprint-7", "Sprint 7")]),
+                issue_by_info_response(42),
+                # API returns a link for OUR #42 AND a sibling-repo #42
+                add_issues_to_sprints_response(
+                    linked=[
+                        (42, "acme", "widgets"),
+                        (42, "acme", "gadgets"),
+                    ]
+                ),
+            ],
+        ):
             out = zh_graphql_ops.add_issues_to_sprint(
-                ctx, "Sprint 7", [42],
+                ctx,
+                "Sprint 7",
+                [42],
             )
         # Only our-repo link should credit
         assert out["succeeded"] == [42]
@@ -1003,65 +1140,85 @@ class TestAddIssuesToSprint:
 
     def test_only_sibling_repo_link_not_credited(self):
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            sprints_page([sprint_node("sprint-7", "Sprint 7")]),
-            issue_by_info_response(42),
-            add_issues_to_sprints_response(linked=[
-                (42, "acme", "gadgets"),  # NOT our repo
-            ]),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                sprints_page([sprint_node("sprint-7", "Sprint 7")]),
+                issue_by_info_response(42),
+                add_issues_to_sprints_response(
+                    linked=[
+                        (42, "acme", "gadgets"),  # NOT our repo
+                    ]
+                ),
+            ],
+        ):
             out = zh_graphql_ops.add_issues_to_sprint(
-                ctx, "Sprint 7", [42],
+                ctx,
+                "Sprint 7",
+                [42],
             )
         assert out["succeeded"] == []
         assert out["failed"] == [42]
 
     def test_duplicate_input_coalesces(self):
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            sprints_page([sprint_node("sprint-7", "Sprint 7")]),
-            issue_by_info_response(42),
-            issue_by_info_response(43),
-            add_issues_to_sprints_response(linked=[
-                (42, "acme", "widgets"),
-                (43, "acme", "widgets"),
-            ]),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                sprints_page([sprint_node("sprint-7", "Sprint 7")]),
+                issue_by_info_response(42),
+                issue_by_info_response(43),
+                add_issues_to_sprints_response(
+                    linked=[
+                        (42, "acme", "widgets"),
+                        (43, "acme", "widgets"),
+                    ]
+                ),
+            ],
+        ):
             out = zh_graphql_ops.add_issues_to_sprint(
-                ctx, "Sprint 7", [42, 42, 43, 42],
+                ctx,
+                "Sprint 7",
+                [42, 42, 43, 42],
             )
         assert out["success_count"] == 2
         assert sorted(out["succeeded"]) == [42, 43]
 
     def test_missing_issue_caught_preflight(self):
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            sprints_page([sprint_node("sprint-7", "Sprint 7")]),
-            issue_by_info_response(100),
-            issue_not_found_response(),  # 9999 not found
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                sprints_page([sprint_node("sprint-7", "Sprint 7")]),
+                issue_by_info_response(100),
+                issue_not_found_response(),  # 9999 not found
+            ],
+        ):
             out = zh_graphql_ops.add_issues_to_sprint(
-                ctx, "Sprint 7", [100, 9999],
+                ctx,
+                "Sprint 7",
+                [100, 9999],
             )
         assert out["ok"] is False
         assert 9999 in out["failed"]
 
 
-# =============================================================================
-# `remove_issues_from_sprint`
-# =============================================================================
-
 class TestRemoveIssuesFromSprint:
     def test_happy_path(self):
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            sprints_page([sprint_node("sprint-7", "Sprint 7")]),
-            issue_by_info_response(100),
-            issue_by_info_response(101),
-            remove_issues_from_sprints_response(still_attached=[]),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                sprints_page([sprint_node("sprint-7", "Sprint 7")]),
+                issue_by_info_response(100),
+                issue_by_info_response(101),
+                remove_issues_from_sprints_response(still_attached=[]),
+            ],
+        ):
             out = zh_graphql_ops.remove_issues_from_sprint(
-                ctx, "Sprint 7", [100, 101],
+                ctx,
+                "Sprint 7",
+                [100, 101],
             )
         assert out["ok"] is True
         assert sorted(out["succeeded"]) == [100, 101]
@@ -1073,16 +1230,23 @@ class TestRemoveIssuesFromSprint:
 
     def test_partial_fail_one_still_attached(self):
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            sprints_page([sprint_node("sprint-7", "Sprint 7")]),
-            issue_by_info_response(100),
-            issue_by_info_response(101),
-            remove_issues_from_sprints_response(still_attached=[
-                (101, "acme", "widgets"),
-            ]),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                sprints_page([sprint_node("sprint-7", "Sprint 7")]),
+                issue_by_info_response(100),
+                issue_by_info_response(101),
+                remove_issues_from_sprints_response(
+                    still_attached=[
+                        (101, "acme", "widgets"),
+                    ]
+                ),
+            ],
+        ):
             out = zh_graphql_ops.remove_issues_from_sprint(
-                ctx, "Sprint 7", [100, 101],
+                ctx,
+                "Sprint 7",
+                [100, 101],
             )
         assert out["outcome"] == "partial"
         assert out["succeeded"] == [100]
@@ -1090,16 +1254,23 @@ class TestRemoveIssuesFromSprint:
 
     def test_multi_repo_sibling_not_misclassified(self):
         ctx = make_ctx()  # acme/widgets
-        with patch_ctx_query(ctx, [
-            sprints_page([sprint_node("sprint-7", "Sprint 7")]),
-            issue_by_info_response(42),
-            # Sibling repo's #42 still in sprint — not our concern
-            remove_issues_from_sprints_response(still_attached=[
-                (42, "acme", "gadgets"),
-            ]),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                sprints_page([sprint_node("sprint-7", "Sprint 7")]),
+                issue_by_info_response(42),
+                # Sibling repo's #42 still in sprint — not our concern
+                remove_issues_from_sprints_response(
+                    still_attached=[
+                        (42, "acme", "gadgets"),
+                    ]
+                ),
+            ],
+        ):
             out = zh_graphql_ops.remove_issues_from_sprint(
-                ctx, "Sprint 7", [42],
+                ctx,
+                "Sprint 7",
+                [42],
             )
         # Our acme/widgets#42 was removed; the gadgets #42 doesn't
         # block us.
@@ -1108,28 +1279,38 @@ class TestRemoveIssuesFromSprint:
 
     def test_duplicate_input_coalesces(self):
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            sprints_page([sprint_node("sprint-7", "Sprint 7")]),
-            issue_by_info_response(42),
-            issue_by_info_response(43),
-            remove_issues_from_sprints_response(still_attached=[]),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                sprints_page([sprint_node("sprint-7", "Sprint 7")]),
+                issue_by_info_response(42),
+                issue_by_info_response(43),
+                remove_issues_from_sprints_response(still_attached=[]),
+            ],
+        ):
             out = zh_graphql_ops.remove_issues_from_sprint(
-                ctx, "Sprint 7", [42, 43, 42],
+                ctx,
+                "Sprint 7",
+                [42, 43, 42],
             )
         assert out["success_count"] == 2
         assert sorted(out["succeeded"]) == [42, 43]
 
     def test_empty_sprints_array_triggers_walker_recovery(self):
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            sprints_page([sprint_node("sprint-7", "Sprint 7")]),
-            issue_by_info_response(100),
-            remove_issues_from_sprints_response(empty_sprints=True),
-            sprint_issues_page([]),  # walker says empty
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                sprints_page([sprint_node("sprint-7", "Sprint 7")]),
+                issue_by_info_response(100),
+                remove_issues_from_sprints_response(empty_sprints=True),
+                sprint_issues_page([]),  # walker says empty
+            ],
+        ):
             out = zh_graphql_ops.remove_issues_from_sprint(
-                ctx, "Sprint 7", [100],
+                ctx,
+                "Sprint 7",
+                [100],
             )
         assert out["succeeded"] == [100]
         assert out["response_anomaly"] is not None
@@ -1139,18 +1320,24 @@ class TestRemoveIssuesFromSprint:
         must be False (the bug-pin test in test_sprint_ops.py covers
         the >100 path; this one covers the recovery path)."""
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            sprints_page([sprint_node("sprint-7", "Sprint 7")]),
-            issue_by_info_response(100),
-            remove_issues_from_sprints_response(empty_sprints=True),
-            # Walker page with stuck cursor
-            sprint_issues_page(
-                [sprint_issue_wrapper(100)],
-                has_next=True, end_cursor=None,
-            ),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                sprints_page([sprint_node("sprint-7", "Sprint 7")]),
+                issue_by_info_response(100),
+                remove_issues_from_sprints_response(empty_sprints=True),
+                # Walker page with stuck cursor
+                sprint_issues_page(
+                    [sprint_issue_wrapper(100)],
+                    has_next=True,
+                    end_cursor=None,
+                ),
+            ],
+        ):
             out = zh_graphql_ops.remove_issues_from_sprint(
-                ctx, "Sprint 7", [100],
+                ctx,
+                "Sprint 7",
+                [100],
             )
         assert out["pagination_warning"] is not None
         assert out["inspected_full"] is False
@@ -1171,120 +1358,99 @@ class TestRemoveIssuesFromSprint:
         any input → all inputs in `succeeded`). Round 5 fixes that
         and this test pins both axes.
         """
-        # Scenario A: the partial walk reached a sibling-repo issue
-        # (filtered out by repos_match) but NEVER reached either
-        # input. So walked_numbers={999} (sibling), still_attached={},
-        # and `succeeded` should be EMPTY — not [100, 101] as the
-        # round-4 logic produced.
+        # Scenario A: the partial walk reached a sibling-repo issue (filtered out by repos_match) but NEVER reached either input. So walked_numbers={999} (sibling),
+        # still_attached={}, and `succeeded` should be EMPTY — not [100, 101] as the round-4 logic produced.
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            sprints_page([sprint_node("sprint-7", "Sprint 7")]),
-            issue_by_info_response(100),
-            issue_by_info_response(101),
-            remove_issues_from_sprints_response(empty_sprints=True),
-            sprint_issues_page(
-                [sprint_issue_wrapper(999, owner="acme", repo="gadgets")],
-                has_next=True, end_cursor=None,
-            ),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                sprints_page([sprint_node("sprint-7", "Sprint 7")]),
+                issue_by_info_response(100),
+                issue_by_info_response(101),
+                remove_issues_from_sprints_response(empty_sprints=True),
+                sprint_issues_page(
+                    [sprint_issue_wrapper(999, owner="acme", repo="gadgets")],
+                    has_next=True,
+                    end_cursor=None,
+                ),
+            ],
+        ):
             out = zh_graphql_ops.remove_issues_from_sprint(
-                ctx, "Sprint 7", [100, 101],
+                ctx,
+                "Sprint 7",
+                [100, 101],
             )
         assert out["inspected_full"] is False
         assert out["ok"] is False
-        assert out["outcome"] == "fail", (
-            "SPEC: zero confirmed positives → outcome='fail'"
-        )
+        assert out["outcome"] == "fail", "SPEC: zero confirmed positives → outcome='fail'"
         # Round-5 #1: succeeded must be empty when no input was reached
         assert out["succeeded"] == [], (
             "Round-5 #1: succeeded over-counted when walker never "
             "reached the inputs. Honest SPEC says succeeded ⊆ "
             "walked_numbers, so an unreached input cannot appear here."
         )
-        assert out["failed"] == [], (
-            "failed only lists walker-observed-still-attached; "
-            "un-verified inputs go to response_anomaly's count."
-        )
+        assert out["failed"] == [], "failed only lists walker-observed-still-attached; un-verified inputs go to response_anomaly's count."
         assert "coverage incomplete" in (out["response_anomaly"] or "").lower()
         # The honest count narrative: 0 verified, 2 un-verified.
         assert "verified 0 of 2" in (out["response_anomaly"] or "")
         assert "2 input(s) un-verified" in (out["response_anomaly"] or "")
 
-        # Scenario B: walker reaches input #100 and observes it still-
-        # attached (real failure); input #101 un-verified (walker
-        # bailed before reaching it). SPEC: succeeded=[], failed=[100],
-        # un-verified count=1.
+        # Scenario B: walker reaches input #100 and observes it still- attached (real failure); input #101 un-verified (walker bailed
+        # before reaching it). SPEC: succeeded=[], failed=[100], un-verified count=1.
         ctx2 = make_ctx()
-        with patch_ctx_query(ctx2, [
-            sprints_page([sprint_node("sprint-7", "Sprint 7")]),
-            issue_by_info_response(100),
-            issue_by_info_response(101),
-            remove_issues_from_sprints_response(empty_sprints=True),
-            sprint_issues_page(
-                [sprint_issue_wrapper(100)],
-                has_next=True, end_cursor=None,
-            ),
-        ]):
+        with patch_ctx_query(
+            ctx2,
+            [
+                sprints_page([sprint_node("sprint-7", "Sprint 7")]),
+                issue_by_info_response(100),
+                issue_by_info_response(101),
+                remove_issues_from_sprints_response(empty_sprints=True),
+                sprint_issues_page(
+                    [sprint_issue_wrapper(100)],
+                    has_next=True,
+                    end_cursor=None,
+                ),
+            ],
+        ):
             out2 = zh_graphql_ops.remove_issues_from_sprint(
-                ctx2, "Sprint 7", [100, 101],
+                ctx2,
+                "Sprint 7",
+                [100, 101],
             )
         assert out2["inspected_full"] is False
         assert out2["ok"] is False
         assert out2["outcome"] == "fail"
-        assert out2["succeeded"] == [], (
-            "Walker saw #100 still-attached, never reached #101. "
-            "Neither input was observed-absent. succeeded must be []."
-        )
-        assert out2["failed"] == [100], (
-            "Walker observed #100 still-attached after mutation; "
-            "it's a confirmed failure."
-        )
+        assert out2["succeeded"] == [], "Walker saw #100 still-attached, never reached #101. Neither input was observed-absent. succeeded must be []."
+        assert out2["failed"] == [100], "Walker observed #100 still-attached after mutation; it's a confirmed failure."
         assert "coverage incomplete" in (out2["response_anomaly"] or "").lower()
         assert "1 input(s) un-verified" in (out2["response_anomaly"] or "")
 
-        # Scenario C (round-5 #1 honest-positive): walker reaches
-        # input #100 and confirms it absent (succeeded); never reaches
-        # #101 (un-verified). SPEC: succeeded=[100], failed=[],
-        # un-verified count=1, outcome="partial" (we DID confirm one).
+        # Scenario C (round-5 #1 honest-positive): walker reaches input #100 and confirms it absent (succeeded); never reaches #101 (un-verified). SPEC:
+        # succeeded=[100], failed=[], un-verified count=1, outcome="partial" (we DID confirm one).
         ctx3 = make_ctx()
-        with patch_ctx_query(ctx3, [
-            sprints_page([sprint_node("sprint-7", "Sprint 7")]),
-            issue_by_info_response(100),
-            issue_by_info_response(101),
-            remove_issues_from_sprints_response(empty_sprints=True),
-            # Walker page returns a sibling issue #100 AND a sibling-
-            # repo unrelated #999, then bails. Walker saw #100 in
-            # walked_numbers, but it's NOT in still_attached (issue
-            # 100 is the one we removed, only #999-gadgets remains).
-            # Wait — recovery branch walks the WHOLE sprint, so if
-            # #100 is GONE from the sprint, it won't be in the walked
-            # results at all. Use a different setup: walker reaches
-            # #999 (un-removed entry) which is not our input. So
-            # walked_numbers={999}, still_attached={} (after repo
-            # filter), and neither #100 nor #101 is in walked. That's
-            # scenario A's shape, not what we want. Scenario C needs
-            # the walker to actually REACH #100 — let's put #100
-            # itself in the walk but make it a different repo so the
-            # repo-filter exempts it from still_attached.
-            #
-            # Actually, the cleanest scenario-C: walker walks the full
-            # sprint and #100 has been removed (so it's NOT in the
-            # walk's pages); #101 is un-verified because walker bails
-            # before reaching its page.
-            sprint_issues_page(
-                [sprint_issue_wrapper(100)],
-                has_next=True, end_cursor=None,
-            ),
-        ]):
+        with patch_ctx_query(
+            ctx3,
+            [
+                sprints_page([sprint_node("sprint-7", "Sprint 7")]),
+                issue_by_info_response(100),
+                issue_by_info_response(101),
+                remove_issues_from_sprints_response(empty_sprints=True),
+                # Walker page returns a sibling issue #100 AND a sibling- repo unrelated #999, then bails. Walker saw #100 in walked_numbers, but it's NOT in still_attached (issue 100 is the one we removed, only #999-gadgets remains). Wait — recovery branch walks the WHOLE sprint, so if #100 is GONE from the sprint, it won't be in the walked results at all. Use a different setup: walker reaches #999 (un-removed entry) which is not our input. So walked_numbers={999}, still_attached={} (after repo filter), and
+                # neither #100 nor #101 is in walked. That's scenario A's shape, not what we want. Scenario C needs the walker to actually REACH #100 — let's put #100 itself in the walk but make it a different repo so the repo-filter exempts it from still_attached.  Actually, the cleanest scenario-C: walker walks the full sprint and #100 has been removed (so it's NOT in the walk's pages); #101 is un-verified because walker bails before reaching its page.
+                sprint_issues_page(
+                    [sprint_issue_wrapper(100)],
+                    has_next=True,
+                    end_cursor=None,
+                ),
+            ],
+        ):
             out3 = zh_graphql_ops.remove_issues_from_sprint(
-                ctx3, "Sprint 7", [100, 101],
+                ctx3,
+                "Sprint 7",
+                [100, 101],
             )
-        # The fixture above has walker reach #100 STILL-ATTACHED
-        # (same shape as scenario B). To pin succeeded=[100] honestly
-        # we'd need the walker to observe #100's gid as the
-        # post-mutation sprint NOT containing it — which means the
-        # mocked page must NOT include #100. We cover this via
-        # `test_partial_walk_with_confirmed_positive` below.
+            # The fixture above has walker reach #100 STILL-ATTACHED (same shape as scenario B). To pin succeeded=[100] honestly we'd need the walker to observe #100's gid as the post-mutation sprint NOT
+            # containing it — which means the mocked page must NOT include #100. We cover this via `test_partial_walk_with_confirmed_positive` below.
         assert out3["outcome"] == "fail"  # same as B with this fixture
 
     def test_partial_walk_with_confirmed_positive(self):
@@ -1294,31 +1460,28 @@ class TestRemoveIssuesFromSprint:
         Distinct from scenario A/B above where succeeded is empty.
         """
         ctx = make_ctx()
-        # Walker reaches issue #999 (sibling that's still in the
-        # sprint), and the page is full so walked includes #999 only.
-        # Inputs #100 / #101 — neither is in still_attached, but
-        # neither is in walked_numbers either, so they're un-verified.
-        # To pin a confirmed-positive we need walker to reach #100.
-        # Setup: mutation response has an empty sprints array,
-        # triggers recovery walk; walker's first page contains #101
-        # (still-attached, our repo), then bails. So #101 confirmed-
-        # failed (walked + still_attached), #100 un-verified.
-        with patch_ctx_query(ctx, [
-            sprints_page([sprint_node("sprint-7", "Sprint 7")]),
-            issue_by_info_response(100),
-            issue_by_info_response(101),
-            remove_issues_from_sprints_response(empty_sprints=True),
-            # Walker reaches #101 (still-attached, our repo) then
-            # bails. The canonical SPEC contract is below; the
-            # cross-repo inflation scenario is pinned by
-            # `test_partial_walk_no_inflation_across_repos`.
-            sprint_issues_page(
-                [sprint_issue_wrapper(101)],
-                has_next=True, end_cursor=None,
-            ),
-        ]):
+        # Walker reaches issue #999 (sibling that's still in the sprint), and the page is full so walked includes #999 only. Inputs #100 / #101 — neither is in still_attached, but neither is in walked_numbers either, so they're un-verified. To pin a confirmed-positive we need walker to reach
+        # #100. Setup: mutation response has an empty sprints array, triggers recovery walk; walker's first page contains #101 (still-attached, our repo), then bails. So #101 confirmed- failed (walked + still_attached), #100 un-verified.
+        with patch_ctx_query(
+            ctx,
+            [
+                sprints_page([sprint_node("sprint-7", "Sprint 7")]),
+                issue_by_info_response(100),
+                issue_by_info_response(101),
+                remove_issues_from_sprints_response(empty_sprints=True),
+                # Walker reaches #101 (still-attached, our repo) then bails. The canonical SPEC contract is below; the cross-repo inflation
+                # scenario is pinned by `test_partial_walk_no_inflation_across_repos`.
+                sprint_issues_page(
+                    [sprint_issue_wrapper(101)],
+                    has_next=True,
+                    end_cursor=None,
+                ),
+            ],
+        ):
             out = zh_graphql_ops.remove_issues_from_sprint(
-                ctx, "Sprint 7", [100, 101],
+                ctx,
+                "Sprint 7",
+                [100, 101],
             )
         assert out["inspected_full"] is False
         # #101 walker-observed-still-attached → confirmed failure
@@ -1340,17 +1503,23 @@ class TestRemoveIssuesFromSprint:
         Pin against an LLM caller hand-rolling a `zh sprint show ...`
         because the field doesn't say so."""
         ctx = make_ctx()
-        with patch_ctx_query(ctx, [
-            sprints_page([sprint_node("sprint-7", "Sprint 7")]),
-            issue_by_info_response(100),
-            remove_issues_from_sprints_response(empty_sprints=True),
-            sprint_issues_page(
-                [sprint_issue_wrapper(100)],
-                has_next=True, end_cursor=None,
-            ),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                sprints_page([sprint_node("sprint-7", "Sprint 7")]),
+                issue_by_info_response(100),
+                remove_issues_from_sprints_response(empty_sprints=True),
+                sprint_issues_page(
+                    [sprint_issue_wrapper(100)],
+                    has_next=True,
+                    end_cursor=None,
+                ),
+            ],
+        ):
             out = zh_graphql_ops.remove_issues_from_sprint(
-                ctx, "Sprint 7", [100],
+                ctx,
+                "Sprint 7",
+                [100],
             )
         assert "zh sprint show" in (out["response_anomaly"] or "")
 
@@ -1370,20 +1539,25 @@ class TestRemoveIssuesFromSprint:
           - succeeded = ∅                    ← correct
         """
         ctx = make_ctx()  # owner_repo="acme/widgets"
-        with patch_ctx_query(ctx, [
-            sprints_page([sprint_node("sprint-7", "Sprint 7")]),
-            issue_by_info_response(42),
-            remove_issues_from_sprints_response(empty_sprints=True),
-            # Walker page contains acme/gadgets#42 (sibling repo,
-            # same number), then bails on stuck cursor before any
-            # acme/widgets pages.
-            sprint_issues_page(
-                [sprint_issue_wrapper(42, owner="acme", repo="gadgets")],
-                has_next=True, end_cursor=None,
-            ),
-        ]):
+        with patch_ctx_query(
+            ctx,
+            [
+                sprints_page([sprint_node("sprint-7", "Sprint 7")]),
+                issue_by_info_response(42),
+                remove_issues_from_sprints_response(empty_sprints=True),
+                # Walker page contains acme/gadgets#42 (sibling repo, same number), then bails on stuck
+                # cursor before any acme/widgets pages.
+                sprint_issues_page(
+                    [sprint_issue_wrapper(42, owner="acme", repo="gadgets")],
+                    has_next=True,
+                    end_cursor=None,
+                ),
+            ],
+        ):
             out = zh_graphql_ops.remove_issues_from_sprint(
-                ctx, "Sprint 7", [42],
+                ctx,
+                "Sprint 7",
+                [42],
             )
         assert out["inspected_full"] is False
         assert out["succeeded"] == [], (
@@ -1397,10 +1571,6 @@ class TestRemoveIssuesFromSprint:
         # un-verified count = 1 (our input wasn't reached in our repo)
         assert "1 input(s) un-verified" in (out["response_anomaly"] or "")
 
-
-# =============================================================================
-# zh_api foundation: _GH_URL_RE
-# =============================================================================
 
 class TestGhUrlRegex:
     def test_basic_forms(self):
@@ -1418,14 +1588,10 @@ class TestGhUrlRegex:
 
     def test_repo_with_dots(self):
         cases = [
-            ("git@github.com:acme/docs.github.io.git",
-             "acme", "docs.github.io"),
-            ("https://github.com/acme/docs.github.io",
-             "acme", "docs.github.io"),
-            ("git@github.com:acme/internal.docs.git",
-             "acme", "internal.docs"),
-            ("git@github.com:acme/my.tool",
-             "acme", "my.tool"),
+            ("git@github.com:acme/docs.github.io.git", "acme", "docs.github.io"),
+            ("https://github.com/acme/docs.github.io", "acme", "docs.github.io"),
+            ("git@github.com:acme/internal.docs.git", "acme", "internal.docs"),
+            ("git@github.com:acme/my.tool", "acme", "my.tool"),
         ]
         for url, owner, repo in cases:
             m = zh_api._GH_URL_RE.search(url)
@@ -1455,9 +1621,7 @@ class TestGhUrlRegex:
         `https?://github.com/` prefix that now rejects gist URLs
         outright. Round-4 #5."""
         m = zh_api._GH_URL_RE.search("https://gist.github.com/acme/abc123")
-        assert m is None, (
-            f"gist URL should NOT match the canonical regex; got {m!r}"
-        )
+        assert m is None, f"gist URL should NOT match the canonical regex; got {m!r}"
 
 
 class TestUrlRegexParity:
@@ -1473,9 +1637,8 @@ class TestUrlRegexParity:
     (ssh://, git://, git+ssh://) are rejected.
     """
 
-    # The Python regexes are importable; the bash one isn't directly,
-    # so we test both Python parsers and document that the bash regex
-    # is kept structurally identical (verified inline at the source).
+    # The Python regexes are importable; the bash one isn't directly, so we test both Python parsers and document that the bash
+    # regex is kept structurally identical (verified inline at the source).
 
     ACCEPTED_FORMS = [
         ("git@github.com:acme/widgets.git", "acme", "widgets"),
@@ -1484,8 +1647,7 @@ class TestUrlRegexParity:
         ("https://github.com/acme/widgets", "acme", "widgets"),
         ("http://github.com/acme/widgets/", "acme", "widgets"),
         # Dots in repo names — all three parsers must handle.
-        ("git@github.com:acme/docs.github.io.git",
-         "acme", "docs.github.io"),
+        ("git@github.com:acme/docs.github.io.git", "acme", "docs.github.io"),
         ("https://github.com/acme/internal.docs", "acme", "internal.docs"),
     ]
 
@@ -1496,9 +1658,8 @@ class TestUrlRegexParity:
         "git://github.com/acme/widgets",
         # git+ssh:// (likewise)
         "git+ssh://git@github.com/acme/widgets",
-        # Gist URLs (different service)
-        # NB: zh_api documented this as imperfect-but-harmless above.
-        # The stricter prefix now rejects gist URLs explicitly.
+        # Gist URLs (different service) NB: zh_api documented this as imperfect-but-harmless above. The
+        # stricter prefix now rejects gist URLs explicitly.
         "https://gist.github.com/acme/abc123",
         # Garbage prefix (round-5 #6) — `^` anchor rejects.
         "prefix-junk-git@github.com:owner/repo",
@@ -1514,6 +1675,7 @@ class TestUrlRegexParity:
 
     def _similarity_parse(self, url):
         from similarity import _GITHUB_URL_RE
+
         m = _GITHUB_URL_RE.search(url)
         if not m:
             return None
@@ -1522,16 +1684,12 @@ class TestUrlRegexParity:
     def test_zh_api_accepts_canonical_forms(self):
         for url, owner, repo in self.ACCEPTED_FORMS:
             result = self._zh_api_parse(url)
-            assert result == (owner, repo), (
-                f"zh_api regex failed on {url!r}: got {result!r}"
-            )
+            assert result == (owner, repo), f"zh_api regex failed on {url!r}: got {result!r}"
 
     def test_similarity_accepts_canonical_forms(self):
         for url, owner, repo in self.ACCEPTED_FORMS:
             result = self._similarity_parse(url)
-            assert result == (owner, repo), (
-                f"similarity regex failed on {url!r}: got {result!r}"
-            )
+            assert result == (owner, repo), f"similarity regex failed on {url!r}: got {result!r}"
 
     def test_zh_api_rejects_non_canonical_forms(self):
         """SPEC: prefix-anchored regex MUST NOT silently match
@@ -1539,84 +1697,77 @@ class TestUrlRegexParity:
         Matrix gap from round-4 #5."""
         for url in self.REJECTED_FORMS:
             result = self._zh_api_parse(url)
-            assert result is None, (
-                f"zh_api regex unexpectedly matched {url!r}: "
-                f"got {result!r}"
-            )
+            assert result is None, f"zh_api regex unexpectedly matched {url!r}: got {result!r}"
 
     def test_similarity_rejects_non_canonical_forms(self):
         """Same SPEC as the zh_api side — parity is the load-bearing
         property."""
         for url in self.REJECTED_FORMS:
             result = self._similarity_parse(url)
-            assert result is None, (
-                f"similarity regex unexpectedly matched {url!r}: "
-                f"got {result!r}"
-            )
+            assert result is None, f"similarity regex unexpectedly matched {url!r}: got {result!r}"
 
     def test_parsers_agree_on_every_input(self):
         """The two Python parsers must produce identical outputs for
         the same input — anything else is the kind of drift that
         bit us in rounds 1 / 2 / 3. (Bash is structurally identical
         but not directly testable from Python; see commit message.)"""
-        all_inputs = (
-            [url for url, _, _ in self.ACCEPTED_FORMS]
-            + list(self.REJECTED_FORMS)
-        )
+        all_inputs = [url for url, _, _ in self.ACCEPTED_FORMS] + list(self.REJECTED_FORMS)
         for url in all_inputs:
             zh_api_result = self._zh_api_parse(url)
             sim_result = self._similarity_parse(url)
-            assert zh_api_result == sim_result, (
-                f"parsers disagree on {url!r}: "
-                f"zh_api={zh_api_result!r} similarity={sim_result!r}"
-            )
+            assert zh_api_result == sim_result, f"parsers disagree on {url!r}: zh_api={zh_api_result!r} similarity={sim_result!r}"
 
-
-# =============================================================================
-# zh_api foundation: list_workspaces
-# =============================================================================
 
 class TestListWorkspaces:
     @staticmethod
     def _ws_page(nodes, *, has_next=False, end_cursor=None):
         return {
             "data": {
-                "repositoriesByGhId": [{
-                    "id": "repo-gid-123",
-                    "workspacesConnection": {
-                        "pageInfo": {
-                            "hasNextPage": has_next,
-                            "endCursor": end_cursor,
+                "repositoriesByGhId": [
+                    {
+                        "id": "repo-gid-123",
+                        "workspacesConnection": {
+                            "pageInfo": {
+                                "hasNextPage": has_next,
+                                "endCursor": end_cursor,
+                            },
+                            "nodes": nodes,
                         },
-                        "nodes": nodes,
-                    },
-                }]
+                    }
+                ]
             }
         }
 
     def test_happy_single_page(self, monkeypatch):
         monkeypatch.setattr(zh_api, "get_gh_repo_id", lambda *a, **kw: 123)
         monkeypatch.setattr(
-            zh_api, "graphql_request",
-            lambda *a, **kw: self._ws_page([
-                {"id": "ws-1", "name": "A"},
-                {"id": "ws-2", "name": "B"},
-            ]),
+            zh_api,
+            "graphql_request",
+            lambda *a, **kw: self._ws_page(
+                [
+                    {"id": "ws-1", "name": "A"},
+                    {"id": "ws-2", "name": "B"},
+                ]
+            ),
         )
         nodes = zh_api.list_workspaces("acme/widgets", token="t", gh_token="t")
         assert {n["name"] for n in nodes} == {"A", "B"}
 
     def test_walks_pagination(self, monkeypatch):
         monkeypatch.setattr(zh_api, "get_gh_repo_id", lambda *a, **kw: 123)
-        responses = iter([
-            self._ws_page(
-                [{"id": f"ws-{i}", "name": f"W{i}"} for i in range(50)],
-                has_next=True, end_cursor="cur1",
-            ),
-            self._ws_page([{"id": "ws-old", "name": "Old"}]),
-        ])
+        responses = iter(
+            [
+                self._ws_page(
+                    [{"id": f"ws-{i}", "name": f"W{i}"} for i in range(50)],
+                    has_next=True,
+                    end_cursor="cur1",
+                ),
+                self._ws_page([{"id": "ws-old", "name": "Old"}]),
+            ]
+        )
         monkeypatch.setattr(
-            zh_api, "graphql_request",
+            zh_api,
+            "graphql_request",
             lambda *a, **kw: next(responses),
         )
         nodes = zh_api.list_workspaces("acme/widgets", token="t", gh_token="t")
@@ -1627,10 +1778,12 @@ class TestListWorkspaces:
         monkeypatch.setattr(zh_api, "get_gh_repo_id", lambda *a, **kw: 123)
         stuck = self._ws_page(
             [{"id": "ws-1", "name": "A"}],
-            has_next=True, end_cursor=None,
+            has_next=True,
+            end_cursor=None,
         )
         monkeypatch.setattr(
-            zh_api, "graphql_request",
+            zh_api,
+            "graphql_request",
             lambda *a, **kw: stuck,
         )
         nodes = zh_api.list_workspaces("acme/widgets", token="t", gh_token="t")
@@ -1639,36 +1792,36 @@ class TestListWorkspaces:
     def test_empty_connection(self, monkeypatch):
         monkeypatch.setattr(zh_api, "get_gh_repo_id", lambda *a, **kw: 123)
         monkeypatch.setattr(
-            zh_api, "graphql_request",
+            zh_api,
+            "graphql_request",
             lambda *a, **kw: self._ws_page([]),
         )
         nodes = zh_api.list_workspaces("acme/widgets", token="t", gh_token="t")
         assert nodes == []
 
 
-# =============================================================================
-# zh_api foundation: resolve_context env-var precedence
-# =============================================================================
-
 class TestResolveContext:
     """Documented precedence (kept in sync with bash):
 
-      Repo: arg > ZH_REPO_OVERRIDE > ZH_REPO > config > git remote
-      Workspace: arg > ZH_WORKSPACE_NAME > ZH_WORKSPACE > config > first
+    Repo: arg > ZH_REPO_OVERRIDE > ZH_REPO > config > git remote
+    Workspace: arg > ZH_WORKSPACE_NAME > ZH_WORKSPACE > config > first
     """
 
     def _patch(self, monkeypatch):
         monkeypatch.setattr(
-            zh_api, "resolve_token", lambda config=None: "tok",
+            zh_api,
+            "resolve_token",
+            lambda config=None: "tok",
         )
         monkeypatch.setattr(
-            zh_api, "get_zenhub_repo_id", lambda *a, **kw: "repo-gid",
+            zh_api,
+            "get_zenhub_repo_id",
+            lambda *a, **kw: "repo-gid",
         )
         monkeypatch.setattr(
-            zh_api, "get_workspace_id",
-            lambda owner_repo, **kw: (
-                f"ws-for-{kw.get('workspace_name') or 'default'}"
-            ),
+            zh_api,
+            "get_workspace_id",
+            lambda owner_repo, **kw: f"ws-for-{kw.get('workspace_name') or 'default'}",
         )
         monkeypatch.setattr(zh_api, "load_config", lambda *a, **kw: {})
 
@@ -1693,7 +1846,8 @@ class TestResolveContext:
         monkeypatch.delenv("ZH_REPO_OVERRIDE", raising=False)
         monkeypatch.delenv("ZH_REPO", raising=False)
         monkeypatch.setattr(
-            zh_api, "get_owner_repo_from_git",
+            zh_api,
+            "get_owner_repo_from_git",
             lambda cwd=None: "fromgit/repo",
         )
         ctx = zh_api.resolve_context()
@@ -1704,7 +1858,8 @@ class TestResolveContext:
         monkeypatch.setenv("ZH_WORKSPACE_NAME", "ignored")
         monkeypatch.setenv("ZH_WORKSPACE", "also ignored")
         ctx = zh_api.resolve_context(
-            owner_repo="acme/widgets", workspace_name="Arg WS",
+            owner_repo="acme/widgets",
+            workspace_name="Arg WS",
         )
         assert ctx.workspace_id == "ws-for-Arg WS"
 
@@ -1723,10 +1878,6 @@ class TestResolveContext:
         assert ctx.workspace_id == "ws-for-Config WS"
 
 
-# =============================================================================
-# zh_api foundation: RepoContext.query (transport + auth boundary)
-# =============================================================================
-
 class TestRepoContextQuery:
     def test_query_routes_through_graphql_request(self, monkeypatch):
         """RepoContext.query is a thin shim — it should pass the token
@@ -1740,7 +1891,9 @@ class TestRepoContextQuery:
             return {"data": {}}
 
         monkeypatch.setattr(
-            zh_api, "graphql_request", fake_graphql_request,
+            zh_api,
+            "graphql_request",
+            fake_graphql_request,
         )
         ctx = make_ctx(token="my-token")
         ctx.query("query { x }", {"a": 1})
@@ -1759,60 +1912,96 @@ class TestRepoContextQuery:
             return {"data": {}}
 
         monkeypatch.setattr(
-            zh_api, "graphql_request", fake_graphql_request,
+            zh_api,
+            "graphql_request",
+            fake_graphql_request,
         )
         ctx = make_ctx()
         ctx.query("query { x }")
         assert captured["variables"] is None
 
 
-# =============================================================================
-# MCP wrappers: every documented key on early-return paths
-# =============================================================================
-
 SUBISSUE_LIST_KEYS = {
-    "ok", "parent_number", "parent_title", "parent_state",
-    "total_count", "fetched_count", "children",
-    "pagination_warning", "stderr",
+    "ok",
+    "parent_number",
+    "parent_title",
+    "parent_state",
+    "total_count",
+    "fetched_count",
+    "children",
+    "pagination_warning",
+    "stderr",
 }
 
 SUBISSUE_MUTATION_KEYS = {
-    # v1.9.2 round-4 (PR #27) finding #14: `unaccounted` and
-    # `failed_unknown_count` are returned by every path of
-    # subissue_add_children / subissue_remove_children and are in
-    # the docstrings; adding them here so a regression dropping
-    # them from any return path is caught by the shape tests.
-    # v1.9.2 round-4 #2: `parent` is the cross-surface alias; both
-    # `parent_number` (legacy) and `parent` are required.
-    "ok", "partial_applied", "parent_number", "parent", "outcome",
-    "success_count", "failed_count", "succeeded", "failed",
-    "unaccounted", "failed_unknown_count",
-    "github_errors", "partial_success_warning", "stderr",
+    # v1.9.2 round-4 (PR #27) finding #14: `unaccounted` and `failed_unknown_count` are returned by every path of subissue_add_children / subissue_remove_children and are in the docstrings; adding them here so a regression dropping
+    # them from any return path is caught by the shape tests. v1.9.2 round-4 #2: `parent` is the cross-surface alias; both `parent_number` (legacy) and `parent` are required.
+    "ok",
+    "partial_applied",
+    "parent_number",
+    "parent",
+    "outcome",
+    "success_count",
+    "failed_count",
+    "succeeded",
+    "failed",
+    "unaccounted",
+    "failed_unknown_count",
+    "github_errors",
+    "partial_success_warning",
+    "stderr",
 }
 
 SUBISSUE_REORDER_KEYS = {
-    "ok", "child_number", "parent_number", "position",
-    "outcome", "stderr",
+    "ok",
+    "child_number",
+    "parent_number",
+    "position",
+    "outcome",
+    "stderr",
 }
 
 SPRINT_SHOW_KEYS = {
-    "ok", "sprint_id", "sprint_name", "state",
-    "start_at", "end_at",
-    "completed_points", "total_points", "closed_issues_count",
-    "description", "issue_count", "issues",
-    "pagination_warning", "stderr",
+    "ok",
+    "sprint_id",
+    "sprint_name",
+    "state",
+    "start_at",
+    "end_at",
+    "completed_points",
+    "total_points",
+    "closed_issues_count",
+    "description",
+    "issue_count",
+    "issues",
+    "pagination_warning",
+    "stderr",
 }
 
 SPRINT_ADD_KEYS = {
-    "ok", "sprint_id", "sprint_name", "outcome",
-    "success_count", "failed_count", "succeeded", "failed",
+    "ok",
+    "sprint_id",
+    "sprint_name",
+    "outcome",
+    "success_count",
+    "failed_count",
+    "succeeded",
+    "failed",
     "stderr",
 }
 
 SPRINT_REMOVE_KEYS = {
-    "ok", "sprint_id", "sprint_name", "outcome",
-    "success_count", "failed_count", "succeeded", "failed",
-    "inspected_full", "pagination_warning", "response_anomaly",
+    "ok",
+    "sprint_id",
+    "sprint_name",
+    "outcome",
+    "success_count",
+    "failed_count",
+    "succeeded",
+    "failed",
+    "inspected_full",
+    "pagination_warning",
+    "response_anomaly",
     "stderr",
 }
 
@@ -1860,10 +2049,6 @@ class TestMcpEarlyReturnShapes:
         _full_shape(r, SPRINT_REMOVE_KEYS)
 
 
-# =============================================================================
-# Bash dispatcher integration — round-5 #9
-# =============================================================================
-
 class TestBashDispatcher:
     """Pin that `zh -w foo` (and similar `-r/-w` invocations with no
     subcommand) don't trip `set -u` on bash 3.2's empty-array
@@ -1878,6 +2063,7 @@ class TestBashDispatcher:
     import os
     import subprocess as _subprocess
     from pathlib import Path as _Path
+
     _REPO_ROOT = _Path(__file__).resolve().parent.parent
     _ZH_SCRIPT = _REPO_ROOT / "zh"
 
@@ -1893,13 +2079,12 @@ class TestBashDispatcher:
         """
         import os
         import subprocess
+
         env = os.environ.copy()
         if env_extra:
             env.update(env_extra)
-        # Empty ZH_TOKEN avoids the config-load error path firing
-        # before main() even gets to dispatch — but the dispatcher
-        # parses global flags BEFORE invoking the subcommand body,
-        # so the bug shape is reachable regardless of token state.
+            # Empty ZH_TOKEN avoids the config-load error path firing before main() even gets to dispatch — but the dispatcher parses global flags BEFORE
+            # invoking the subcommand body, so the bug shape is reachable regardless of token state.
         return subprocess.run(
             ["bash", str(self._ZH_SCRIPT), *args],
             capture_output=True,
@@ -1916,15 +2101,10 @@ class TestBashDispatcher:
         """
         result = self._run_zh("-w", "foo")
         combined = (result.stdout or "") + (result.stderr or "")
-        assert "unbound variable" not in combined, (
-            f"bash 3.2 set -u tripped on empty args array: "
-            f"stdout={result.stdout!r}, stderr={result.stderr!r}"
-        )
+        assert "unbound variable" not in combined, f"bash 3.2 set -u tripped on empty args array: stdout={result.stdout!r}, stderr={result.stderr!r}"
         # Either help output OR a clean "no command" error; not a
         # crash. Both have "zh" somewhere in the output.
-        assert "zh" in combined.lower(), (
-            f"no recognizable zh output; combined={combined!r}"
-        )
+        assert "zh" in combined.lower(), f"no recognizable zh output; combined={combined!r}"
 
     def test_dash_r_no_subcommand_falls_through(self):
         """Same SPEC for `-r owner/repo` alone."""
@@ -1950,16 +2130,12 @@ class TestBashDispatcher:
         """
         import os
         import subprocess
+
         # Build a temp config file
         cfg = tmp_path / "config"
-        cfg.write_text(
-            "ZH_TOKEN=tok_from_config\n"
-            "ZH_REPO=repo_from_config\n"
-            "ZH_WORKSPACE=ws_from_config\n"
-        )
-        # Extract load_config from zh and run with the temp config.
-        # Use a wrapper script so we can override CONFIG_FILE and
-        # call load_config in isolation.
+        cfg.write_text("ZH_TOKEN=tok_from_config\nZH_REPO=repo_from_config\nZH_WORKSPACE=ws_from_config\n")
+        # Extract load_config from zh and run with the temp config. Use a wrapper script so we can override
+        # CONFIG_FILE and call load_config in isolation.
         env = os.environ.copy()
         env["CONFIG_FILE"] = str(cfg)
         env["ZH_REPO"] = "repo_from_env"
@@ -1967,39 +2143,32 @@ class TestBashDispatcher:
         env.pop("ZH_TOKEN", None)
         env.pop("ZH_WORKSPACE", None)
 
-        # Inline shell that sources zh's load_config and dumps the
-        # resolved values. Routes through `bash zh workspaces` —
-        # this will fail at the gh api call but we only need to
-        # observe the resolved env vars BEFORE the API attempt.
-        # Simpler: extract load_config and run it directly.
+        # Inline shell that sources zh's load_config and dumps the resolved values. Routes through `bash zh workspaces` — this will fail at the gh api call but we only need to observe the resolved env vars BEFORE the API attempt.
+        # Simpler: extract load_config and run it directly.  Post-lib-split: load_config lives in `lib/core.sh`, not in the monolithic `zh` entrypoint (which now only sources it).
         wrapper = tmp_path / "wrapper.sh"
-        zh_path = str(self._ZH_SCRIPT)
+        zh_path = str(self._REPO_ROOT / "lib" / "core.sh")
         wrapper.write_text(
             "#!/bin/bash\n"
             "set -euo pipefail\n"
-            "error() { echo \"ERROR: $1\" >&2; exit 1; }\n"
+            'error() { echo "ERROR: $1" >&2; exit 1; }\n'
             f"eval \"$(awk '/^load_config\\(\\)/,/^}}/' {zh_path})\"\n"
             "load_config\n"
-            "echo \"TOKEN=$ZH_TOKEN\"\n"
-            "echo \"REPO=$ZH_REPO\"\n"
-            "echo \"WS=$ZH_WORKSPACE\"\n"
+            'echo "TOKEN=$ZH_TOKEN"\n'
+            'echo "REPO=$ZH_REPO"\n'
+            'echo "WS=$ZH_WORKSPACE"\n'
         )
         wrapper.chmod(0o755)
         result = subprocess.run(
             ["bash", str(wrapper)],
-            capture_output=True, text=True, env=env, timeout=10,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=10,
         )
         out = result.stdout
         # Config token (env unset) → config wins
-        assert "TOKEN=tok_from_config" in out, (
-            f"expected token from config; got: {out!r}"
-        )
+        assert "TOKEN=tok_from_config" in out, f"expected token from config; got: {out!r}"
         # Env repo set → env wins
-        assert "REPO=repo_from_env" in out, (
-            f"Round-6 #14: env var should win over config file. "
-            f"got: {out!r}"
-        )
+        assert "REPO=repo_from_env" in out, f"Round-6 #14: env var should win over config file. got: {out!r}"
         # Workspace env unset → config wins
-        assert "WS=ws_from_config" in out, (
-            f"expected workspace from config; got: {out!r}"
-        )
+        assert "WS=ws_from_config" in out, f"expected workspace from config; got: {out!r}"

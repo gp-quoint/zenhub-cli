@@ -20,7 +20,7 @@ The PR review workflow enforces rules the automated reviewer applies on every pu
 
 ```bash
 # View issues and board
-zh issue <number>       # View issue details (shows ZenHub + GitHub URLs)
+zh issue <number>       # View issue details (description, comments, ZH + GH URLs)
 zh mine                 # Your assigned issues (with ZenHub URLs)
 zh mine @username       # Issues assigned to user
 zh mine --no-urls       # Compact output without URLs
@@ -35,8 +35,12 @@ zh estimate <issue> <points>  # Set estimate
 zh assign <issue> <user> [user...]      # Assign one or more users
 zh unassign <issue> <user> [user...]    # Remove only the named assignee(s)
 zh unassign <issue> --all               # Remove ALL assignees (explicit; a bare unassign no longer clears everyone)
-zh comment <issue> "text"     # Add comment
-zh close <issue> [comment]    # Close issue
+zh comment <issue> "text"     # Add comment (omit text to open $EDITOR)
+zh comment edit <issue> [N]   # Edit comment N (1-based from zh issue; omit N to pick)
+                              # Non-interactive: -m / -f / --stdin / --fill KEY=value
+                              # --fill replaces {{KEY}} (deferred PR URL fill)
+zh edit <issue>               # Edit title/description via $EDITOR (or -t/-d/-f)
+zh close <issue> [comment]    # Close issue (-r completed|not planned|duplicate)
 zh reopen <issue>             # Reopen closed issue
 zh delete <issue> [-y]        # DANGER: permanently delete a GitHub issue (via gh; prefer close). Prompts when interactive; -y skips
 
@@ -194,7 +198,19 @@ zh reopen 123
 
 ```
 zenhub-cli/
-├── zh                  # Main executable (bash script)
+├── zh                      # Thin entrypoint (sources lib/, runs main)
+├── lib/                    # Bash command modules (sourced by zh)
+│   ├── core.sh
+│   ├── issue_types.sh
+│   ├── help.sh
+│   ├── discovery.sh
+│   ├── issues.sh
+│   ├── create.sh
+│   ├── deps_priority.sh
+│   ├── hierarchy.sh
+│   ├── sprints.sh
+│   ├── subissues.sh
+│   └── browse.sh
 ├── mcp_server.py       # MCP server entry point (FastMCP + tool defs)
 ├── zh_api.py           # GraphQL client + auth/repo/workspace resolution
 ├── zh_graphql_ops.py   # ZenHub GraphQL ops (sub-issues + sprints)
@@ -206,10 +222,10 @@ zenhub-cli/
 ├── CONTRIBUTING.md     # Contribution workflow
 ├── SECURITY.md         # Security posture
 ├── LICENSE             # MIT license
-├── VERSION             # Current version number
 └── .github/workflows/  # CI + Claude review workflows
 ```
 
+Versioning is **VCS-based** (`hatch-vcs`): `zh version` / package metadata come from git tags (`vX.Y.Z` on `main`). Do not hand-edit a version string in `pyproject.toml`.
 ## Configuration
 
 The tool reads tokens from `~/.config/zh/config`:
@@ -229,6 +245,10 @@ ZH_REST_TOKEN=...   # REST API token (unblock command only)
 |---|---|
 | `ZH_REPO` | Default `owner/repo` for `zh` invocations; overridden by `-r owner/repo`. |
 | `ZH_WORKSPACE` | Default workspace name; overridden by `-w "Workspace Name"`. Precedence: flag > env / config > git-remote + first-workspace fallback. |
+| `ZH_BKT` | Set to `0` to disable `bkt` caching of read-only GraphQL (default: on when `bkt` is installed). Mutations are never cached and invalidate reads. |
+| `ZH_BKT_TTL` | Cache TTL for GraphQL reads (default `5m`). Passed to `bkt --ttl`. |
+| `ZH_BKT_FORCE` | Set to `1` to bust the GraphQL cache for this process (`bkt --force`). `zh browse` ctrl-r sets this via a session flag file. |
+| `ZH_GRAPHQL_CACHE_GEN` | Override path of the gen file whose mtime is in the `bkt` cache key (default `~/.cache/zh/graphql-cache.gen`). |
 
 **MCP server**
 
@@ -243,7 +263,7 @@ ZH_REST_TOKEN=...   # REST API token (unblock command only)
 
 ## Development Notes
 
-- Single bash script, no build process
+- Bash entrypoint + lib/ modules, no build process
 - Uses `jq` for JSON processing
 - Uses `gh` CLI for GitHub API calls
 - GraphQL API at `https://api.zenhub.com/public/graphql`

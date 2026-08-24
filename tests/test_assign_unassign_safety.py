@@ -22,13 +22,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import mcp_server  # noqa: E402
-from _bash_runner import run_zh_with_stubs  # noqa: E402
+import mcp_server
 
-# --- shared bash stubs ------------------------------------------------------
-# Issue #882 has two assignees (daniel-pittman, alinavalshchuk). The zh_graphql
-# stub echoes the assignee IDs sent to the add/remove mutation as a marker so a
-# test can assert exactly which users were touched.
+from _bash_runner import run_zh_with_stubs
+
 _UNASSIGN_STUBS = r"""
     load_config() { :; }
     get_repo_info() { printf 'acme/widgets'; }
@@ -63,8 +60,6 @@ _ASSIGN_STUBS = r"""
     }
 """
 
-
-# --- bash: unassign ---------------------------------------------------------
 
 def test_unassign_named_user_removes_only_that_user() -> None:
     """#80 core: unassign one of two assignees → only that user's ID is sent to
@@ -107,8 +102,6 @@ def test_unassign_multiple_named_users() -> None:
     assert 'REMOVE_IDS=["uid-alina","uid-daniel"]' in r.stderr, f"got {r.stderr!r}"
 
 
-# --- bash: assign -----------------------------------------------------------
-
 def test_assign_multiple_users() -> None:
     """Symmetric multi-user assign: both users added in one mutation."""
     r = run_zh_with_stubs(_ASSIGN_STUBS, "cmd_assign 882 alice bob")
@@ -121,8 +114,6 @@ def test_assign_no_user_errors() -> None:
     assert r.returncode != 0
     assert "Usage: zh assign" in r.stderr
 
-
-# --- MCP forwarding + guards ------------------------------------------------
 
 def _capture(monkeypatch):
     calls = []
@@ -191,8 +182,6 @@ def test_mcp_unassign_misnamed_kwarg_does_not_clear_all(monkeypatch):
     clear-all. With `assignees` as the canonical param and the no-target guard,
     even if only `user`-style intent is lost, nothing destructive runs."""
     calls = _capture(monkeypatch)
-    # Simulate the dropped-arg situation: caller meant to name a user but the
-    # value didn't land in assignees/user. The guard must catch it.
     out = mcp_server.unassign(number=42, assignees=[])
     assert out["ok"] is False
     assert calls == []
