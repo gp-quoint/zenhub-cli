@@ -1920,6 +1920,23 @@ class TestRepoContextQuery:
         ctx.query("query { x }")
         assert captured["variables"] is None
 
+    def test_execute_raises_on_graphql_errors(self, monkeypatch):
+        def fake_graphql_request(query, variables=None, *, token=None):
+            return {"data": {}, "errors": [{"message": "nope"}]}
+
+        monkeypatch.setattr(zh_api, "graphql_request", fake_graphql_request)
+        ctx = make_ctx(token="t")
+        with pytest.raises(zh_api.ZhApiError, match="GraphQL errors: nope"):
+            ctx.execute("query { x }", context="probe")
+
+    def test_execute_path_walks_data(self, monkeypatch):
+        def fake_graphql_request(query, variables=None, *, token=None):
+            return {"data": {"workspace": {"name": "Main"}}}
+
+        monkeypatch.setattr(zh_api, "graphql_request", fake_graphql_request)
+        ctx = make_ctx(token="t")
+        assert ctx.execute_path("query { x }", None, "workspace", "name", context="w") == "Main"
+
 
 SUBISSUE_LIST_KEYS = {
     "ok",

@@ -1,0 +1,28 @@
+# Planning hierarchy (initiative / project / epic / sub-task)
+
+query ListByIssueType($workspaceId: ID!, $typeName: String!) {
+  workspace(id: $workspaceId) {
+    name
+    issues(first: 100, filters: {issueIssueTypes: {in: [$typeName]}}) {
+      totalCount
+      nodes { number title state repository { ownerName name } }
+    }
+  }
+}
+
+query HierarchyChildrenDetail($repoId: ID!, $issueNumber: Int!, $workspaceId: ID!) {
+  issueByInfo(repositoryId: $repoId, issueNumber: $issueNumber) {
+    number
+    issueType { name }
+    githubChildIssues(first: 100) {
+      totalCount
+      nodes {
+        number
+        title
+        state
+        assignees { nodes { login } }
+        pipelineIssue(workspaceId: $workspaceId) { pipeline { name } }
+      }
+    }
+  }
+}

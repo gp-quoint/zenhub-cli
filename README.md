@@ -134,18 +134,21 @@ Precedence (highest first): `-r` / `-w` flag → `ZH_REPO` / `ZH_WORKSPACE` env 
 
 `zh workspaces` shows every workspace the repo is connected to and marks which one the rest of the CLI would currently target.
 
-### GraphQL caching (`bkt`)
+### GraphQL caching
 
-When [`bkt`](https://github.com/dimo414/bkt) is on `PATH`, read-only GraphQL calls are cached (default TTL `5m`, scope `zh-graphql`). Mutations are never cached and **invalidate** the read cache (in-process + `bkt` via a gen-file mtime) so the next `zh pipeline` / `zh sprint` sees fresh membership. Useful knobs:
+Read-only GraphQL calls use a two-level cache:
+
+1. **L1** — in-process memo for the current Python process
+2. **L2** — [`diskcache`](https://grantjenks.com/docs/diskcache/) under `~/.cache/zh/graphql/` (XDG), shared across CLI/MCP invocations
+
+Mutations are never cached and **invalidate** L1 plus bump an on-disk generation so L2 keys miss. Useful knobs:
 
 | Variable | Purpose |
 |---|---|
-| `ZH_BKT=0` | Disable caching |
-| `ZH_BKT_TTL` | TTL passed to `bkt --ttl` (default `5m`) |
-| `ZH_BKT_FORCE=1` | Bust cache for this process |
-| `ZH_GRAPHQL_CACHE_GEN` | Override path of the mutation gen file (default `~/.cache/zh/graphql-cache.gen`) |
-
-In `zh browse`, **ctrl-r** force-reloads and busts the cache; view switches (`alt-s` / `alt-m` / `alt-a`) reuse warm entries when TTL allows. Editing: **ctrl-t** opens `$EDITOR` for title/body, **ctrl-e** adds a comment. **enter** opens the issue view (truncated issue in the fzf header, comments as one-liners); there enter / **ctrl-e** view or edit a selected comment. **ctrl-o** opens the issue URL in the browser (main list and issue view); **alt-o** pages the full issue (title, body, comments) in `less`.
+| `ZH_GRAPHQL_CACHE=0` | Disable L2 (L1 still applies) |
+| `ZH_GRAPHQL_CACHE_TTL` | L2 TTL (`5m`, `300`, `1h`; default `5m`) |
+| `ZH_GRAPHQL_CACHE_FORCE=1` | Skip L2 for this process |
+| `ZH_GRAPHQL_CACHE_DIR` | Override L2 directory |
 
 ### Alternative: Project-level Config
 

@@ -2,9 +2,48 @@
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TypedDict
 
 from zh.schemas import MutationResult
+
+
+class PageInfo(TypedDict, total=False):
+    hasNextPage: bool
+    endCursor: str | None
+
+
+def paginate_pages[T](
+    fetch_page: Callable[[str | None], tuple[list[T], PageInfo]],
+    *,
+    max_pages: int = 200,
+    stuck_warning: str = (
+        "Pagination cursor not advancing across requests — server likely mis-reporting hasNextPage. Bailing."
+    ),
+    cap_warning: str | None = None,
+) -> tuple[list[T], str | None]:
+    """Walk a GraphQL connection via ``fetch_page(after) -> (nodes, pageInfo)``.
+
+    Returns ``(items, warning)``. Stops on no next page, stuck cursor, or ``max_pages``.
+    """
+    items: list[T] = []
+    cursor: str | None = None
+    last_cursor: str | None = None
+    warning: str | None = None
+    cap_msg = cap_warning or f"Pagination iteration cap ({max_pages}) exceeded — bailing"
+
+    for _ in range(max_pages):
+        page_items, page_info = fetch_page(cursor)
+        items.extend(page_items)
+        if not page_info.get("hasNextPage"):
+            return items, warning
+        end_cursor = page_info.get("endCursor")
+        if not end_cursor or end_cursor == last_cursor:
+            return items, stuck_warning
+        last_cursor = end_cursor
+        cursor = end_cursor
+
+    return items, cap_msg
 
 
 def serialize_failed_issues(failed_issues: list[Any]) -> list[dict[str, Any]]:
@@ -150,15 +189,6 @@ def parse_subissue_child_node(node: dict[str, Any]) -> dict[str, Any]:
         },
     }
 
-
-def subissue_pagination_warning(page_info: dict[str, Any], last_cursor: str | None) -> str | None:
-    has_next = bool(page_info.get("hasNextPage"))
-    end_cursor = page_info.get("endCursor")
-    if not has_next:
-        return None
-    if not end_cursor or end_cursor == last_cursor:
-        return "Pagination cursor not advancing across requests — server likely mis-reporting hasNextPage. Bailing."
-    return None
 
 
 def parse_sprint_issue_node(issue: dict[str, Any]) -> dict[str, Any]:

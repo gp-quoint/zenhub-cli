@@ -4,45 +4,19 @@ from __future__ import annotations
 
 from typing import cast
 
-from zh.api import RepoContext, ZhApiError, check_graphql_errors
+from zh.api import RepoContext, ZhApiError
 from zh.cli.output import warn
 from zh.graphql_ops import get_issue_by_info, list_sub_issues
-from zh.json_helpers import as_dict, dict_nodes, gql_get
+from zh.json_helpers import as_dict, dict_nodes
+from zh.operations import op
 from zh.schemas import PlanningChildRow, PlanningListItem, PlanningListResult, PlanningShowResult
 from zh.workspace_ops import fetch_issue_types, resolve_issue_type_id
 
 _PLANNING_NOUNS = frozenset({"initiative", "project", "epic", "sub-task", "subtask"})
 
-_LIST_BY_TYPE = """
-query($workspaceId: ID!, $typeName: String!) {
-  workspace(id: $workspaceId) {
-    name
-    issues(first: 100, filters: {issueIssueTypes: {in: [$typeName]}}) {
-      totalCount
-      nodes { number title state repository { ownerName name } }
-    }
-  }
-}
-"""
+_LIST_BY_TYPE = op("planning", "ListByIssueType")
 
-_CHILDREN_DETAIL = """
-query($repoId: ID!, $issueNumber: Int!, $workspaceId: ID!) {
-  issueByInfo(repositoryId: $repoId, issueNumber: $issueNumber) {
-    number
-    issueType { name }
-    githubChildIssues(first: 100) {
-      totalCount
-      nodes {
-        number
-        title
-        state
-        assignees { nodes { login } }
-        pipelineIssue(workspaceId: $workspaceId) { pipeline { name } }
-      }
-    }
-  }
-}
-"""
+_CHILDREN_DETAIL = op("planning", "HierarchyChildrenDetail")
 
 
 def display_noun(type_name: str) -> str:
@@ -66,9 +40,14 @@ def canonical_type_name(ctx: RepoContext, type_name: str) -> str:
 
 def list_issues_by_type(ctx: RepoContext, type_name: str) -> PlanningListResult:
     canonical = canonical_type_name(ctx, type_name)
-    resp = ctx.query(_LIST_BY_TYPE, {"workspaceId": ctx.workspace_id, "typeName": canonical})
-    check_graphql_errors(resp, context="planning list")
-    ws = as_dict(gql_get(resp, "workspace"))
+    ws = as_dict(
+        ctx.execute_path(
+            _LIST_BY_TYPE,
+            {"workspaceId": ctx.workspace_id, "typeName": canonical},
+            "workspace",
+            context="planning list",
+        ),
+    )
     issues_conn = as_dict(ws.get("issues"))
     nodes = dict_nodes(issues_conn.get("nodes"))
     items = [
@@ -90,12 +69,12 @@ def list_issues_by_type(ctx: RepoContext, type_name: str) -> PlanningListResult:
 
 
 def hierarchy_children_detail(ctx: RepoContext, parent_number: int) -> PlanningShowResult:
-    resp = ctx.query(
+    node = ctx.execute_path(
         _CHILDREN_DETAIL,
         {"repoId": ctx.repo_id, "issueNumber": parent_number, "workspaceId": ctx.workspace_id},
+        "issueByInfo",
+        context="hierarchy children",
     )
-    check_graphql_errors(resp, context="hierarchy children")
-    node = gql_get(resp, "issueByInfo")
     if not node:
         raise ZhApiError(f"Issue #{parent_number} not found")
     node_dict = as_dict(node)

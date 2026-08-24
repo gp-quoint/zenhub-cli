@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from zh.api import JsonDict
+type JsonDict = dict[str, Any]
 
 _EMPTY: JsonDict = {}
 
@@ -25,8 +25,14 @@ def gql_data(resp: JsonDict) -> JsonDict:
     return as_dict(resp.get("data"))
 
 
-def gql_get(resp: JsonDict, *keys: str) -> Any:
-    node: Any = gql_data(resp)
+def data_get(data: Any, *keys: str) -> Any:
+    """Walk *keys* through an already-extracted GraphQL ``data`` object."""
+    node: Any = data
     for key in keys:
         node = as_dict(node).get(key)
     return node
+
+
+def gql_get(resp: JsonDict, *keys: str) -> Any:
+    """Walk *keys* under ``resp["data"]`` (full GraphQL envelope)."""
+    return data_get(gql_data(resp), *keys)

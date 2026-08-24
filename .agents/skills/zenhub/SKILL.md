@@ -34,7 +34,7 @@ zh -r owner/repo -w "Team" board   # global flags before subcommand
 - **Machine output:** `--json` on stdout (human info on stderr) where supported; `-q` emits only the new issue number on create. Prefer `--json` on writes agents must verify (`zh move … --json`, `zh sprint add … --json`). **`zh edit` has no `--json`** — apply with `-f`/`-t`/`-d`, then verify via `zh issue <N> --json`.
 - **Nested subcommands:** `zh sprint add current 42`, `zh comment edit 42 [index]`, `zh epic create "Title"`. Comment add is the default: `zh comment 42 …` ≡ `zh comment add 42 …`. Sprint show defaults similarly: `zh sprint` / `zh sprint current` ≡ `zh sprint show current`.
 - **Sprint membership:** `zh sprint add current 42` and `zh sa current 42` both work. Prefer the explicit form in scripts.
-- **Pipeline moves:** `zh move 42 "In Progress"` or unique prefix/substring (`zh move 42 progress`). `--json` returns `{ok, number, title, from, to}` with the real prior pipeline. Mutations invalidate GraphQL read caches (`bkt` gen file), so a follow-up `zh pipeline` / `zh sprint` sees fresh state without `ZH_BKT_FORCE=1`.
+- **Pipeline moves:** `zh move 42 "In Progress"` or unique prefix/substring (`zh move 42 progress`). `--json` returns `{ok, number, title, from, to}` with the real prior pipeline. Mutations invalidate GraphQL read caches (in-process + on-disk gen), so a follow-up `zh pipeline` / `zh sprint` sees fresh state without `ZH_GRAPHQL_CACHE_FORCE=1`.
 - **`zh c` vs `zh comment`:** `c` is add-only (no `edit` subcommand). Use `zh comment edit …` for edits.
 
 ## CLI setup

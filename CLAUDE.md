@@ -245,10 +245,10 @@ ZH_REST_TOKEN=...   # REST API token (unblock command only)
 |---|---|
 | `ZH_REPO` | Default `owner/repo` for `zh` invocations; overridden by `-r owner/repo`. |
 | `ZH_WORKSPACE` | Default workspace name; overridden by `-w "Workspace Name"`. Precedence: flag > env / config > git-remote + first-workspace fallback. |
-| `ZH_BKT` | Set to `0` to disable `bkt` caching of read-only GraphQL (default: on when `bkt` is installed). Mutations are never cached and invalidate reads. |
-| `ZH_BKT_TTL` | Cache TTL for GraphQL reads (default `5m`). Passed to `bkt --ttl`. |
-| `ZH_BKT_FORCE` | Set to `1` to bust the GraphQL cache for this process (`bkt --force`). `zh browse` ctrl-r sets this via a session flag file. |
-| `ZH_GRAPHQL_CACHE_GEN` | Override path of the gen file whose mtime is in the `bkt` cache key (default `~/.cache/zh/graphql-cache.gen`). |
+| `ZH_GRAPHQL_CACHE` | Set to `0` to disable on-disk (`diskcache`) GraphQL read caching. L1 in-process memo remains. Mutations never cache and invalidate both levels. |
+| `ZH_GRAPHQL_CACHE_TTL` | L2 TTL (`5m` / `300` / `1h`; default `5m`). |
+| `ZH_GRAPHQL_CACHE_FORCE` | Set to `1` to skip L2 reads/writes for this process. |
+| `ZH_GRAPHQL_CACHE_DIR` | Override L2 directory (default `~/.cache/zh/graphql` or `$XDG_CACHE_HOME/zh/graphql`). |
 
 **MCP server**
 

@@ -1,0 +1,94 @@
+# Issue lookup + lifecycle mutations
+
+query IssueByInfo($repoId: ID!, $issueNumber: Int!) {
+  issueByInfo(repositoryId: $repoId, issueNumber: $issueNumber) {
+    id
+    number
+    title
+    state
+    repository {
+      ownerName
+      name
+    }
+    parentIssue {
+      id
+      number
+      title
+      repository {
+        ownerName
+        name
+      }
+    }
+  }
+}
+
+query IssuePipeline($repoId: ID!, $issueNumber: Int!) {
+  issueByInfo(repositoryId: $repoId, issueNumber: $issueNumber) {
+    id
+    number
+    title
+    pipelineIssues {
+      nodes {
+        pipeline { id name issues { totalCount } }
+      }
+    }
+  }
+}
+
+query IssueAssignees($repoId: ID!, $issueNumber: Int!) {
+  issueByInfo(repositoryId: $repoId, issueNumber: $issueNumber) {
+    id
+    title
+    assignees { nodes { id login } }
+  }
+}
+
+query WorkspaceAssignees($workspaceId: ID!) {
+  workspace(id: $workspaceId) {
+    assignees { nodes { id login } }
+  }
+}
+
+mutation MoveIssue($input: MoveIssueInput!) {
+  moveIssue(input: $input) {
+    issue {
+      pipelineIssues { nodes { pipeline { name } } }
+    }
+  }
+}
+
+mutation SetEstimate($input: SetEstimateInput!) {
+  setEstimate(input: $input) { issue { estimate { value } } }
+}
+
+mutation SetPriority($input: SetPriorityInput!) {
+  setPriority(input: $input) { pipelineIssue { priority { name } } }
+}
+
+mutation ChangeIssueTypeOfIssues($input: ChangeIssueTypeOfIssuesInput!) {
+  changeIssueTypeOfIssues(input: $input) { issues { number issueType { name } } }
+}
+
+mutation AddAssigneesToIssues($input: AddAssigneesToIssuesInput!) {
+  addAssigneesToIssues(input: $input) { successCount githubErrors }
+}
+
+mutation RemoveAssigneesFromIssues($input: RemoveAssigneesFromIssuesInput!) {
+  removeAssigneesFromIssues(input: $input) { successCount githubErrors }
+}
+
+mutation UpdateIssue($input: UpdateIssueInput!) {
+  updateIssue(input: $input) { issue { number title } }
+}
+
+# Do not select issueType: ZenHub exposes it as a union and nested selections fail.
+mutation CreateIssue($input: CreateIssueInput!) {
+  createIssue(input: $input) {
+    issue {
+      id
+      number
+      title
+      htmlUrl
+    }
+  }
+}

@@ -38,7 +38,7 @@ def make_ctx(
 
 @contextmanager
 def patch_ctx_query(ctx: zh_api.RepoContext, responses: list[dict]):
-    """Patch `ctx.query` to yield each entry of `responses` in turn.
+    """Patch `ctx.execute` to yield each response's data in turn.
 
     Under-supplying responses raises StopIteration — intentional. A
     test that asserts a verb takes N calls but supplies <N responses
@@ -47,9 +47,9 @@ def patch_ctx_query(ctx: zh_api.RepoContext, responses: list[dict]):
     it = iter(responses)
 
     def _next(*args, **kwargs):
-        return next(it)
+        return next(it)["data"]
 
-    with patch.object(ctx, "query", side_effect=_next):
+    with patch.object(ctx, "execute", side_effect=_next):
         yield
 
 

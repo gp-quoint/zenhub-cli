@@ -2,48 +2,36 @@
 
 from __future__ import annotations
 
-import json
-import urllib.error
-import urllib.request
-
-from zh._http import urlopen_https
-from zh.api import RepoContext, ZhApiError, check_graphql_errors, get_gh_repo_id, load_config, resolve_rest_token
+from zh._http import request_text
+from zh.api import RepoContext, ZhApiError, get_gh_repo_id, load_config, resolve_rest_token
 from zh.issue_ops import parse_issue_number
-from zh.json_helpers import as_dict, gql_get
+from zh.json_helpers import as_dict, data_get
+from zh.operations import op
 from zh.schemas import BlockageResult
 
 ZH_REST_URL = "https://api.zenhub.com/p1/dependencies"
 
-_BLOCK_PAIR_QUERY = """
-query($repoId: ID!, $num1: Int!, $num2: Int!) {
-  blocked: issueByInfo(repositoryId: $repoId, issueNumber: $num1) { id title }
-  blocking: issueByInfo(repositoryId: $repoId, issueNumber: $num2) { id title }
-}
-"""
+_BLOCK_PAIR_QUERY = op("deps", "BlockPair")
 
-_CREATE_BLOCKAGE = """
-mutation($input: CreateBlockageInput!) {
-  createBlockage(input: $input) { blockage { id } }
-}
-"""
+_CREATE_BLOCKAGE = op("deps", "CreateBlockage")
 
 
 def create_blockage(ctx: RepoContext, blocked_number: int, blocking_number: int) -> BlockageResult:
     """Make *blocked_number* depend on *blocking_number*."""
-    resp = ctx.query(
+    data = ctx.execute(
         _BLOCK_PAIR_QUERY,
         {"repoId": ctx.repo_id, "num1": blocked_number, "num2": blocking_number},
+        context="block pair lookup",
     )
-    check_graphql_errors(resp, context="block pair lookup")
-    blocked = as_dict(gql_get(resp, "blocked"))
-    blocking = as_dict(gql_get(resp, "blocking"))
+    blocked = as_dict(data_get(data, "blocked"))
+    blocking = as_dict(data_get(data, "blocking"))
     blocked_id = blocked.get("id")
     blocking_id = blocking.get("id")
     if not blocked_id:
         raise ZhApiError(f"Issue #{blocked_number} not found")
     if not blocking_id:
         raise ZhApiError(f"Issue #{blocking_number} not found")
-    mut = ctx.query(
+    data = ctx.execute(
         _CREATE_BLOCKAGE,
         {
             "input": {
@@ -51,9 +39,9 @@ def create_blockage(ctx: RepoContext, blocked_number: int, blocking_number: int)
                 "blocking": {"id": blocking_id, "type": "ISSUE"},
             },
         },
+        context="createBlockage",
     )
-    check_graphql_errors(mut, context="createBlockage")
-    blockage_id = as_dict(as_dict(gql_get(mut, "createBlockage")).get("blockage")).get("id")
+    blockage_id = as_dict(as_dict(data_get(data, "createBlockage")).get("blockage")).get("id")
     if not blockage_id:
         raise ZhApiError("Failed to create blockage")
     return {
@@ -88,27 +76,14 @@ def remove_blockage(owner_repo: str, blocked_raw: str, blocking_raw: str) -> Non
         "blocking": {"repo_id": gh_repo_id, "issue_number": blocking_num},
         "blocked": {"repo_id": gh_repo_id, "issue_number": blocked_num},
     }
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
+    code, body = request_text(
+        "DELETE",
         ZH_REST_URL,
-        data=data,
         headers={
             "X-Authentication-Token": token,
             "Content-Type": "application/json",
         },
-        method="DELETE",
+        json_body=payload,
+        timeout=30.0,
     )
-    try:
-        with urlopen_https(req, timeout=30.0) as resp:
-            code = resp.status
-            body = resp.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as exc:
-        code = exc.code
-        body = exc.read().decode("utf-8", errors="replace")
-        try:
-            _raise_for_rest_status(code, body, blocked=blocked_num, blocking=blocking_num)
-        except ZhApiError as err:
-            raise err from exc
-    except urllib.error.URLError as exc:
-        raise ZhApiError(f"Transport error removing dependency: {exc.reason}") from exc
     _raise_for_rest_status(code, body, blocked=blocked_num, blocking=blocking_num)

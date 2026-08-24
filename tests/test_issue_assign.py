@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import json
-
 import pytest
-
 from tests._fixtures import make_ctx, patch_ctx_query
+
 from zh.issue_ops import assign_issue, unassign_issue
 
 
@@ -42,14 +40,14 @@ def test_unassign_named_user_removes_only_that_user() -> None:
         ],
     ):
         captured: list[dict] = []
-        orig = ctx.query
+        orig = ctx.execute
 
-        def _spy(query, variables=None):
+        def _spy(query, variables=None, **kwargs):
             if "removeAssigneesFromIssues" in query:
                 captured.append(variables)
-            return orig(query, variables)
+            return orig(query, variables, **kwargs)
 
-        ctx.query = _spy  # type: ignore[method-assign]
+        ctx.execute = _spy  # type: ignore[method-assign]
         result = unassign_issue(ctx, 882, ["daniel-pittman"])
     assert captured[0]["input"]["assigneeIds"] == ["uid-daniel"]
     assert result["assignees"] == ["alinavalshchuk"]
@@ -78,14 +76,14 @@ def test_unassign_all_flag_clears_everyone() -> None:
         ],
     ):
         captured: list[dict] = []
-        orig = ctx.query
+        orig = ctx.execute
 
-        def _spy(query, variables=None):
+        def _spy(query, variables=None, **kwargs):
             if "removeAssigneesFromIssues" in query:
                 captured.append(variables)
-            return orig(query, variables)
+            return orig(query, variables, **kwargs)
 
-        ctx.query = _spy  # type: ignore[method-assign]
+        ctx.execute = _spy  # type: ignore[method-assign]
         unassign_issue(ctx, 882, [], clear_all=True)
     assert set(captured[0]["input"]["assigneeIds"]) == {"uid-daniel", "uid-alina"}
 
@@ -102,14 +100,14 @@ def test_assign_multiple_users() -> None:
         ],
     ):
         captured: list[dict] = []
-        orig = ctx.query
+        orig = ctx.execute
 
-        def _spy(query, variables=None):
+        def _spy(query, variables=None, **kwargs):
             if "addAssigneesToIssues" in query:
                 captured.append(variables)
-            return orig(query, variables)
+            return orig(query, variables, **kwargs)
 
-        ctx.query = _spy  # type: ignore[method-assign]
+        ctx.execute = _spy  # type: ignore[method-assign]
         result = assign_issue(ctx, 882, ["alice", "bob"])
     assert set(captured[0]["input"]["assigneeIds"]) == {"uid-alice", "uid-bob"}
     assert result["assignees"] == ["alice", "bob"]

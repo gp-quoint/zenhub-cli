@@ -5,8 +5,9 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Any, cast
 
-from zh.api import RepoContext, ZhApiError, check_graphql_errors, get_gh_repo_id
-from zh.json_helpers import as_dict, dict_nodes, gql_get
+from zh.api import RepoContext, ZhApiError, get_gh_repo_id
+from zh.json_helpers import as_dict, data_get, dict_nodes
+from zh.operations import op
 from zh.schemas import (
     BoardOverview,
     IssueTypeRow,
@@ -17,80 +18,23 @@ from zh.schemas import (
     PriorityRow,
 )
 
-_PIPELINES_QUERY = """
-query($workspaceId: ID!) {
-  workspace(id: $workspaceId) {
-    name
-    pipelinesConnection {
-      nodes { id name issues(state: OPEN) { totalCount } }
-    }
-  }
-}
-"""
+_PIPELINES_QUERY = op("workspace", "PipelinesOpen")
 
-_PIPELINES_ALL_QUERY = """
-query($workspaceId: ID!) {
-  workspace(id: $workspaceId) {
-    name
-    pipelinesConnection {
-      nodes { id name issues { totalCount } }
-    }
-  }
-}
-"""
+_PIPELINES_ALL_QUERY = op("workspace", "PipelinesAll")
 
-_ISSUE_TYPES_QUERY = """
-query($ghIds: [Int!]!, $workspaceId: ID!) {
-  repositoriesByGhId(ghIds: $ghIds) {
-    assignableIssueTypes(workspaceId: $workspaceId, first: 100) {
-      nodes {
-        __typename
-        ... on GithubIssueType { id name level disposition isEnabled }
-        ... on ZenhubIssueType { id name level disposition isEnabled }
-      }
-    }
-  }
-}
-"""
+_ISSUE_TYPES_QUERY = op("workspace", "AssignableIssueTypes")
 
-_PRIORITIES_QUERY = """
-query($workspaceId: ID!) {
-  workspace(id: $workspaceId) {
-    prioritiesConnection { nodes { id name color } }
-  }
-}
-"""
+_PRIORITIES_QUERY = op("workspace", "Priorities")
 
-_LABELS_QUERY = """
-query($ghIds: [Int!]!) {
-  repositoriesByGhId(ghIds: $ghIds) {
-    labels(first: 100) { nodes { name color } }
-  }
-}
-"""
+_LABELS_QUERY = op("workspace", "Labels")
 
-_PIPELINE_ISSUES_QUERY = """
-query($pipelineId: ID!, $workspaceId: ID!, $filters: IssueSearchFiltersInput!) {
-  searchIssuesByPipeline(pipelineId: $pipelineId, filters: $filters, first: 50) {
-    nodes {
-      number
-      title
-      estimate { value }
-      assignees { nodes { login } }
-      repository { ownerName name }
-      zenhubUrl(workspaceId: $workspaceId)
-    }
-  }
-}
-"""
+_PIPELINE_ISSUES_QUERY = op("workspace", "SearchIssuesByPipeline")
 
 
 @lru_cache(maxsize=16)
 def _cached_pipeline_nodes(workspace_id: str, token: str) -> tuple[tuple[str | None, str | None], ...]:
     ctx = RepoContext("", "", workspace_id, token)
-    resp = ctx.query(_PIPELINES_QUERY, {"workspaceId": workspace_id})
-    check_graphql_errors(resp, context="workspace")
-    ws = gql_get(resp, "workspace")
+    ws = ctx.execute_path(_PIPELINES_QUERY, {"workspaceId": workspace_id}, "workspace", context="workspace")
     if not ws:
         raise ZhApiError("Workspace not found")
     nodes = dict_nodes(as_dict(as_dict(ws).get("pipelinesConnection")).get("nodes"))
@@ -157,9 +101,7 @@ def find_pipeline_id(ctx: RepoContext, name: str) -> str:
 
 def board_overview(ctx: RepoContext, *, include_closed: bool = False) -> BoardOverview:
     query = _PIPELINES_ALL_QUERY if include_closed else _PIPELINES_QUERY
-    resp = ctx.query(query, {"workspaceId": ctx.workspace_id})
-    check_graphql_errors(resp, context="board")
-    ws = gql_get(resp, "workspace")
+    ws = ctx.execute_path(query, {"workspaceId": ctx.workspace_id}, "workspace", context="board")
     if not ws:
         raise ZhApiError("Workspace not found")
     ws_dict = as_dict(ws)
@@ -176,12 +118,12 @@ def board_overview(ctx: RepoContext, *, include_closed: bool = False) -> BoardOv
 
 def fetch_issue_types(ctx: RepoContext) -> list[IssueTypeRow]:
     gh_id = get_gh_repo_id(ctx.owner_repo)
-    resp = ctx.query(
+    data = ctx.execute(
         _ISSUE_TYPES_QUERY,
         {"ghIds": [gh_id], "workspaceId": ctx.workspace_id},
+        context="assignableIssueTypes",
     )
-    check_graphql_errors(resp, context="assignableIssueTypes")
-    repos = dict_nodes(gql_get(resp, "repositoriesByGhId"))
+    repos = dict_nodes(data_get(data, "repositoriesByGhId"))
     if not repos:
         return []
     first = as_dict(repos[0])
@@ -217,9 +159,7 @@ def resolve_issue_type_id(ctx: RepoContext, type_name: str) -> str:
 
 
 def fetch_priorities(ctx: RepoContext) -> list[PriorityRow]:
-    resp = ctx.query(_PRIORITIES_QUERY, {"workspaceId": ctx.workspace_id})
-    check_graphql_errors(resp, context="priorities")
-    ws = as_dict(gql_get(resp, "workspace"))
+    ws = as_dict(ctx.execute_path(_PRIORITIES_QUERY, {"workspaceId": ctx.workspace_id}, "workspace", context="priorities"))
     return cast(list[PriorityRow], dict_nodes(as_dict(ws.get("prioritiesConnection")).get("nodes")))
 
 
@@ -236,9 +176,8 @@ def resolve_priority_id(ctx: RepoContext, priority_name: str) -> str:
 
 def fetch_labels(ctx: RepoContext) -> list[LabelRow]:
     gh_id = get_gh_repo_id(ctx.owner_repo)
-    resp = ctx.query(_LABELS_QUERY, {"ghIds": [gh_id]})
-    check_graphql_errors(resp, context="labels")
-    repos = dict_nodes(gql_get(resp, "repositoriesByGhId"))
+    data = ctx.execute(_LABELS_QUERY, {"ghIds": [gh_id]}, context="labels")
+    repos = dict_nodes(data_get(data, "repositoriesByGhId"))
     if not repos:
         return []
     first = as_dict(repos[0])
@@ -256,16 +195,16 @@ def pipeline_issues(
     filters: dict[str, Any] = {}
     if assignee:
         filters["assignees"] = {"in": [assignee.lstrip("@")]}
-    resp = ctx.query(
+    data = ctx.execute(
         _PIPELINE_ISSUES_QUERY,
         {
             "pipelineId": resolved_pipeline_id,
             "workspaceId": ctx.workspace_id,
             "filters": filters,
         },
+        context="searchIssuesByPipeline",
     )
-    check_graphql_errors(resp, context="searchIssuesByPipeline")
-    nodes = dict_nodes(as_dict(gql_get(resp, "searchIssuesByPipeline")).get("nodes"))
+    nodes = dict_nodes(as_dict(data_get(data, "searchIssuesByPipeline")).get("nodes"))
     issues: list[PipelineIssueRow] = []
     for node in nodes:
         repo = as_dict(node.get("repository"))

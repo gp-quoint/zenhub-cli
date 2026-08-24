@@ -1,0 +1,10 @@
+# Issue dependencies (GraphQL create; REST still used for remove)
+
+query BlockPair($repoId: ID!, $num1: Int!, $num2: Int!) {
+  blocked: issueByInfo(repositoryId: $repoId, issueNumber: $num1) { id title }
+  blocking: issueByInfo(repositoryId: $repoId, issueNumber: $num2) { id title }
+}
+
+mutation CreateBlockage($input: CreateBlockageInput!) {
+  createBlockage(input: $input) { blockage { id } }
+}

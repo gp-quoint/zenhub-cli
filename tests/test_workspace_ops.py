@@ -59,7 +59,7 @@ def test_pipeline_issues_uses_empty_filters_by_default() -> None:
             return _pipelines_response()
         return _pipeline_issues_response()
 
-    with patch.object(ctx, "query", side_effect=_query):
+    with patch.object(ctx, "execute", side_effect=lambda query, variables=None, **_: _query(query, variables)["data"]):
         result = pipeline_issues(ctx, "New Issues", pipeline_id="pipe-1")
 
     assert result["pipeline"] == "New Issues"
@@ -79,7 +79,7 @@ def test_pipeline_issues_assignee_filter_uses_in_shape() -> None:
             return _pipelines_response()
         return _pipeline_issues_response()
 
-    with patch.object(ctx, "query", side_effect=_query):
+    with patch.object(ctx, "execute", side_effect=lambda query, variables=None, **_: _query(query, variables)["data"]):
         pipeline_issues(ctx, "New Issues", assignee="@alice", pipeline_id="pipe-1")
 
     issue_filters = captured[-1]["filters"]

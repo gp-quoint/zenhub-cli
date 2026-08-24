@@ -214,7 +214,7 @@ If the project uses ZH sprints (with dates + member lists):
 ```bash
 zh sprint add current 42 --json
 zh move 42 "In Progress" --json   # {ok, number, title, from, to}
-zh pipeline "In Progress" --json  # membership is fresh (mutation invalidated bkt)
+zh pipeline "In Progress" --json  # membership is fresh (mutation invalidated GraphQL cache)
 zh sprint --json
 ```
 

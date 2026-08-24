@@ -30,12 +30,12 @@ def _ctx(owner_repo: str = "acme/widgets") -> zh_api.RepoContext:
 
 
 def _patch_ctx_query(ctx: zh_api.RepoContext, responses: list[dict]):
-    """Patch ctx.query to return each entry of `responses` in turn."""
+    """Patch ctx.execute to return each response's data in turn."""
     it = iter(responses)
     return patch.object(
         ctx,
-        "query",
-        side_effect=lambda query, variables=None: next(it),
+        "execute",
+        side_effect=lambda *args, **kwargs: next(it)["data"],
     )
 
 

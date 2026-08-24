@@ -10,19 +10,20 @@ from __future__ import annotations
 from typing import Any, cast
 
 from zh.api import (
-    _ISSUE_BY_INFO_QUERY,
     RepoContext,
     ZhApiError,
-    check_graphql_errors,
     repos_match,
 )
 from zh.graphql_helpers import (
+    PageInfo,
     finalize_child_mutation_payload,
+    paginate_pages,
     parse_sprint_issue_node,
     parse_subissue_child_node,
     remove_subissue_preflight_failure_payload,
-    subissue_pagination_warning,
 )
+from zh.json_helpers import as_dict, data_get, dict_nodes
+from zh.operations import op
 from zh.schemas import (
     IssueInfo,
     MutationResult,
@@ -30,6 +31,9 @@ from zh.schemas import (
     SprintListResult,
     SubIssueListResult,
 )
+
+
+_ISSUE_BY_INFO_QUERY = op("issues", "IssueByInfo")
 
 
 def _is_positive_int(n) -> bool:
@@ -45,12 +49,12 @@ def get_issue_by_info(ctx: RepoContext, issue_number: int) -> IssueInfo | None:
     """
     if not _is_positive_int(issue_number):
         raise ZhApiError(f"issue number must be a positive int (got {issue_number!r})")
-    resp = ctx.query(
+    raw = ctx.execute_path(
         _ISSUE_BY_INFO_QUERY,
         {"repoId": ctx.repo_id, "issueNumber": issue_number},
+        "issueByInfo",
+        context="issueByInfo",
     )
-    check_graphql_errors(resp, context="issueByInfo")
-    raw = (resp.get("data") or {}).get("issueByInfo")
     return cast(IssueInfo, raw) if raw is not None else None
 
 
@@ -58,41 +62,7 @@ MAX_PAGINATION_ITERATIONS = 200
 _GRAPHQL_PAGE_SIZE = 100
 
 
-_SUBISSUE_LIST_QUERY = """
-query($repoId: ID!, $issueNumber: Int!, $workspaceId: ID!, $after: String) {
-  issueByInfo(repositoryId: $repoId, issueNumber: $issueNumber) {
-    number
-    title
-    state
-    githubChildIssues(first: 100, after: $after) {
-      totalCount
-      pageInfo {
-        hasNextPage
-        endCursor
-      }
-      nodes {
-        id
-        number
-        title
-        state
-        assignees {
-          nodes { login }
-        }
-        pipelineIssue(workspaceId: $workspaceId) {
-          pipeline { name }
-        }
-        pipelineIssues {
-          nodes { pipeline { name } }
-        }
-        repository {
-          ownerName
-          name
-        }
-      }
-    }
-  }
-}
-"""
+_SUBISSUE_LIST_QUERY = op("subissues", "ListSubIssues")
 
 
 def _subissue_list_not_found(parent_number: int) -> SubIssueListResult:
@@ -109,79 +79,49 @@ def _subissue_list_not_found(parent_number: int) -> SubIssueListResult:
     }
 
 
-def _subissue_list_page(
-    issue: dict[str, Any],
-    *,
-    children: list[dict],
-    first_page: bool,
-) -> tuple[tuple[str, str | None, int] | None, dict[str, Any], bool]:
-    meta: tuple[str, str | None, int] | None = None
-    if first_page:
-        meta = (
-            issue.get("title") or "",
-            issue.get("state"),
-            (issue.get("githubChildIssues") or {}).get("totalCount") or 0,
-        )
-        first_page = False
-
-    conn = issue.get("githubChildIssues") or {}
-    for node in conn.get("nodes") or []:
-        if node is None:
-            continue
-        children.append(parse_subissue_child_node(node))
-
-    return meta, conn.get("pageInfo") or {}, first_page
-
-
 def _walk_subissue_children(
     ctx: RepoContext,
     parent_number: int,
 ) -> tuple[list[dict], str, str | None, int, str | None, SubIssueListResult | None]:
-    children: list[dict] = []
     parent_title = ""
     parent_state: str | None = None
     total_count = 0
-    pagination_warning: str | None = None
-
-    cursor: str | None = None
-    last_cursor: str | None = None
-    iterations = 0
     first_page = True
+    not_found = False
 
-    while True:
-        iterations += 1
-        if iterations > MAX_PAGINATION_ITERATIONS:
-            pagination_warning = f"Pagination iteration cap ({MAX_PAGINATION_ITERATIONS}) exceeded — bailing"
-            break
-
-        resp = ctx.query(
-            _SUBISSUE_LIST_QUERY,
-            {
-                "repoId": ctx.repo_id,
-                "issueNumber": parent_number,
-                "workspaceId": ctx.workspace_id,
-                "after": cursor,
-            },
+    def fetch_page(after: str | None) -> tuple[list[dict], PageInfo]:
+        nonlocal first_page, not_found, parent_state, parent_title, total_count
+        issue = as_dict(
+            ctx.execute_path(
+                _SUBISSUE_LIST_QUERY,
+                {
+                    "repoId": ctx.repo_id,
+                    "issueNumber": parent_number,
+                    "workspaceId": ctx.workspace_id,
+                    "after": after,
+                },
+                "issueByInfo",
+                context="list_sub_issues",
+            ),
         )
-        check_graphql_errors(resp, context="list_sub_issues")
-        issue = (resp.get("data") or {}).get("issueByInfo")
         if not issue:
-            return children, parent_title, parent_state, total_count, pagination_warning, _subissue_list_not_found(parent_number)
+            not_found = True
+            return [], {}
+        if first_page:
+            parent_title = str(issue.get("title") or "")
+            parent_state = issue.get("state")
+            total_count = int(as_dict(issue.get("githubChildIssues")).get("totalCount") or 0)
+            first_page = False
+        conn = as_dict(issue.get("githubChildIssues"))
+        children = [parse_subissue_child_node(node) for node in dict_nodes(conn.get("nodes"))]
+        return children, cast(PageInfo, as_dict(conn.get("pageInfo")))
 
-        meta, page_info, first_page = _subissue_list_page(issue, children=children, first_page=first_page)
-        if meta is not None:
-            parent_title, parent_state, total_count = meta
-
-        stuck = subissue_pagination_warning(page_info, last_cursor)
-        if stuck:
-            pagination_warning = stuck
-            break
-        if not page_info.get("hasNextPage"):
-            break
-        end_cursor = page_info.get("endCursor")
-        last_cursor = end_cursor
-        cursor = end_cursor
-
+    children, pagination_warning = paginate_pages(
+        fetch_page,
+        max_pages=MAX_PAGINATION_ITERATIONS,
+    )
+    if not_found:
+        return children, parent_title, parent_state, total_count, pagination_warning, _subissue_list_not_found(parent_number)
     return children, parent_title, parent_state, total_count, pagination_warning, None
 
 
@@ -209,31 +149,9 @@ def list_sub_issues(ctx: RepoContext, parent_number: int) -> SubIssueListResult:
     }
 
 
-_ADD_SUB_ISSUES_MUTATION = """
-mutation($input: AddSubIssuesInput!) {
-  addSubIssues(input: $input) {
-    successCount
-    failedIssues {
-      number
-      repository { ownerName name }
-    }
-    githubErrors
-  }
-}
-"""
+_ADD_SUB_ISSUES_MUTATION = op("subissues", "AddSubIssues")
 
-_REMOVE_SUB_ISSUES_MUTATION = """
-mutation($input: RemoveSubIssuesInput!) {
-  removeSubIssues(input: $input) {
-    successCount
-    failedIssues {
-      number
-      repository { ownerName name }
-    }
-    githubErrors
-  }
-}
-"""
+_REMOVE_SUB_ISSUES_MUTATION = op("subissues", "RemoveSubIssues")
 
 
 def _resolve_child_id(ctx: RepoContext, child_number: int) -> dict:
@@ -310,12 +228,12 @@ def add_sub_issues(ctx: RepoContext, parent_number: int, child_numbers: list[int
             "error": ("Some child issue numbers were not found in this repository: " + ", ".join(f"#{n}" for n in not_found)),
         }
 
-    resp = ctx.query(
+    data = ctx.execute(
         _ADD_SUB_ISSUES_MUTATION,
         {"input": {"parentId": parent_id, "childIssueIds": child_ids}},
+        context="addSubIssues",
     )
-    check_graphql_errors(resp, context="addSubIssues")
-    payload = (resp.get("data") or {}).get("addSubIssues") or {}
+    payload = as_dict(data_get(data, "addSubIssues"))
     return finalize_child_mutation_payload(
         child_numbers=child_numbers,
         parent_number=parent_number,
@@ -425,12 +343,12 @@ def remove_sub_issues(ctx: RepoContext, parent_number: int, child_numbers: list[
 
     child_ids = [issue["id"] for issue in resolved]
 
-    resp = ctx.query(
+    data = ctx.execute(
         _REMOVE_SUB_ISSUES_MUTATION,
         {"input": {"parentId": parent_id, "childIssueIds": child_ids}},
+        context="removeSubIssues",
     )
-    check_graphql_errors(resp, context="removeSubIssues")
-    payload = (resp.get("data") or {}).get("removeSubIssues") or {}
+    payload = as_dict(data_get(data, "removeSubIssues"))
     return finalize_child_mutation_payload(
         child_numbers=child_numbers,
         parent_number=parent_number,
@@ -439,14 +357,7 @@ def remove_sub_issues(ctx: RepoContext, parent_number: int, child_numbers: list[
     )
 
 
-_REPRIORITIZE_SUB_ISSUE_MUTATION = """
-mutation($input: ReprioritizeSubIssueInput!) {
-  reprioritizeSubIssue(input: $input) {
-    success
-    githubErrors
-  }
-}
-"""
+_REPRIORITIZE_SUB_ISSUE_MUTATION = op("subissues", "ReprioritizeSubIssue")
 
 
 def _reorder_sub_issue_result(
@@ -719,7 +630,7 @@ def _execute_reorder_sub_issue_mutation(
     parent_number: int,
     position_desc: str,
 ) -> MutationResult:
-    resp = ctx.query(
+    data = ctx.execute(
         _REPRIORITIZE_SUB_ISSUE_MUTATION,
         {
             "input": {
@@ -729,9 +640,9 @@ def _execute_reorder_sub_issue_mutation(
                 "beforeId": before_id,
             }
         },
+        context="reprioritizeSubIssue",
     )
-    check_graphql_errors(resp, context="reprioritizeSubIssue")
-    payload = (resp.get("data") or {}).get("reprioritizeSubIssue") or {}
+    payload = as_dict(data_get(data, "reprioritizeSubIssue"))
     success = bool(payload.get("success"))
     github_errors = payload.get("githubErrors") or None
     if isinstance(github_errors, dict) and not github_errors:
@@ -823,51 +734,9 @@ def reorder_sub_issue(
     )
 
 
-_SPRINTS_QUERY_OPEN = """
-query($workspaceId: ID!, $after: String) {
-  workspace(id: $workspaceId) {
-    id
-    name
-    activeSprint { id name }
-    sprints(first: 50, after: $after, filters: { state: { eq: OPEN } }) {
-      pageInfo { hasNextPage endCursor }
-      nodes {
-        id
-        name
-        state
-        startAt
-        endAt
-        completedPoints
-        totalPoints
-        closedIssuesCount
-      }
-    }
-  }
-}
-"""
+_SPRINTS_QUERY_OPEN = op("sprints", "SprintsOpen")
 
-_SPRINTS_QUERY_ALL = """
-query($workspaceId: ID!, $after: String) {
-  workspace(id: $workspaceId) {
-    id
-    name
-    activeSprint { id name }
-    sprints(first: 50, after: $after) {
-      pageInfo { hasNextPage endCursor }
-      nodes {
-        id
-        name
-        state
-        startAt
-        endAt
-        completedPoints
-        totalPoints
-        closedIssuesCount
-      }
-    }
-  }
-}
-"""
+_SPRINTS_QUERY_ALL = op("sprints", "SprintsAll")
 
 
 def _serialize_sprint(node: dict, *, active_id: str | None) -> dict:
@@ -884,66 +753,39 @@ def _serialize_sprint(node: dict, *, active_id: str | None) -> dict:
     }
 
 
-def _append_sprint_list_page(
-    ws: dict[str, Any],
-    *,
-    nodes: list[dict],
-    first_page: bool,
-) -> tuple[tuple[str, str | None] | None, dict[str, Any], bool]:
-    meta: tuple[str, str | None] | None = None
-    if first_page:
-        active = ws.get("activeSprint") or {}
-        meta = (ws.get("name") or "", active.get("id"))
-        first_page = False
-
-    conn = ws.get("sprints") or {}
-    for n in conn.get("nodes") or []:
-        if n is None:
-            continue
-        nodes.append(n)
-
-    return meta, conn.get("pageInfo") or {}, first_page
-
-
 def _walk_workspace_sprint_nodes(
     ctx: RepoContext,
     query: str,
 ) -> tuple[str, str | None, list[dict], str | None]:
     workspace_name = ""
     active_id: str | None = None
-    nodes: list[dict] = []
-    cursor: str | None = None
-    last_cursor: str | None = None
-    iterations = 0
-    pagination_warning: str | None = None
     first_page = True
 
-    while True:
-        iterations += 1
-        if iterations > MAX_PAGINATION_ITERATIONS:
-            pagination_warning = f"Sprint pagination iteration cap ({MAX_PAGINATION_ITERATIONS}) exceeded — bailing"
-            break
-        resp = ctx.query(
-            query,
-            {"workspaceId": ctx.workspace_id, "after": cursor},
+    def fetch_page(after: str | None) -> tuple[list[dict], PageInfo]:
+        nonlocal active_id, first_page, workspace_name
+        ws = as_dict(
+            ctx.execute_path(
+                query,
+                {"workspaceId": ctx.workspace_id, "after": after},
+                "workspace",
+                context="list_sprints",
+            ),
         )
-        check_graphql_errors(resp, context="list_sprints")
-        data = resp.get("data") or {}
-        if "workspace" not in data or data.get("workspace") is None:
+        if not ws:
             raise ZhApiError(f"Workspace {ctx.workspace_id!r} resolved to null (deleted, ACL-revoked, or otherwise inaccessible)")
-        ws = data["workspace"]
-        meta, page_info, first_page = _append_sprint_list_page(ws, nodes=nodes, first_page=first_page)
-        if meta is not None:
-            workspace_name, active_id = meta
+        if first_page:
+            workspace_name = str(ws.get("name") or "")
+            active_id = as_dict(ws.get("activeSprint")).get("id")
+            first_page = False
+        conn = as_dict(ws.get("sprints"))
+        return dict_nodes(conn.get("nodes")), cast(PageInfo, as_dict(conn.get("pageInfo")))
 
-        if not page_info.get("hasNextPage"):
-            break
-        end_cursor = page_info.get("endCursor")
-        if not end_cursor or end_cursor == last_cursor:
-            pagination_warning = "Sprint pagination cursor not advancing across requests — server likely mis-reporting hasNextPage. Bailing."
-            break
-        last_cursor = end_cursor
-        cursor = end_cursor
+    nodes, pagination_warning = paginate_pages(
+        fetch_page,
+        max_pages=MAX_PAGINATION_ITERATIONS,
+        stuck_warning="Sprint pagination cursor not advancing across requests — server likely mis-reporting hasNextPage. Bailing.",
+        cap_warning=f"Sprint pagination iteration cap ({MAX_PAGINATION_ITERATIONS}) exceeded — bailing",
+    )
 
     return workspace_name, active_id, nodes, pagination_warning
 
@@ -962,52 +804,9 @@ def list_sprints(ctx: RepoContext, *, include_closed: bool = False) -> SprintLis
     }
 
 
-_SPRINT_HEADER_QUERY = """
-query($sprintId: ID!) {
-  node(id: $sprintId) {
-    ... on Sprint {
-      id
-      name
-      description
-      state
-      startAt
-      endAt
-      completedPoints
-      totalPoints
-      closedIssuesCount
-    }
-  }
-}
-"""
+_SPRINT_HEADER_QUERY = op("sprints", "SprintHeader")
 
-_SPRINT_ISSUES_PAGE_QUERY = """
-query($sprintId: ID!, $after: String, $workspaceId: ID!) {
-  node(id: $sprintId) {
-    ... on Sprint {
-      sprintIssues(first: 100, after: $after) {
-        pageInfo { hasNextPage endCursor }
-        nodes {
-          issue {
-            number
-            title
-            state
-            htmlUrl
-            estimate { value }
-            assignees { nodes { login } }
-            repository { ownerName name }
-            pipelineIssue(workspaceId: $workspaceId) {
-              pipeline { name }
-            }
-            pipelineIssues {
-              nodes { pipeline { name } }
-            }
-          }
-        }
-      }
-    }
-  }
-}
-"""
+_SPRINT_ISSUES_PAGE_QUERY = op("sprints", "SprintIssuesPage")
 
 
 def _resolve_active_sprint_id(
@@ -1070,15 +869,7 @@ def _find_sprint_id(ctx: RepoContext, sprint_name: str) -> tuple[str | None, str
     )
 
 
-_PIPELINES_ORDER_QUERY = """
-query($workspaceId: ID!) {
-  workspace(id: $workspaceId) {
-    pipelinesConnection {
-      nodes { name }
-    }
-  }
-}
-"""
+_PIPELINES_ORDER_QUERY = op("workspace", "PipelinesOrder")
 
 
 def _pipeline_board_index(ctx: RepoContext) -> dict[str, int]:
@@ -1090,11 +881,15 @@ def _pipeline_board_index(ctx: RepoContext) -> dict[str, int]:
     still renders if the pipelines query hiccups).
     """
     try:
-        resp = ctx.query(_PIPELINES_ORDER_QUERY, {"workspaceId": ctx.workspace_id})
-        check_graphql_errors(resp, context="pipelines_order")
+        workspace = ctx.execute_path(
+            _PIPELINES_ORDER_QUERY,
+            {"workspaceId": ctx.workspace_id},
+            "workspace",
+            context="pipelines_order",
+        )
     except Exception:  # noqa: BLE001 — soft-fail to number-only sort
         return {}
-    nodes = (((resp.get("data") or {}).get("workspace") or {}).get("pipelinesConnection") or {}).get("nodes") or []
+    nodes = dict_nodes(as_dict(as_dict(workspace).get("pipelinesConnection")).get("nodes"))
     out: dict[str, int] = {}
     for i, n in enumerate(nodes):
         name = (n or {}).get("name")
@@ -1156,48 +951,39 @@ def _walk_sprint_issues(ctx: RepoContext, sprint_id: str) -> tuple[list[dict], s
 
     Raises ZhApiError on ``data.node = null`` (not the same as an empty sprint).
     """
-    out: list[dict] = []
     walked_numbers: set[int] = set()
-    cursor: str | None = None
-    last_cursor: str | None = None
-    iterations = 0
-    pagination_warning: str | None = None
 
-    while True:
-        iterations += 1
-        if iterations > MAX_PAGINATION_ITERATIONS:
-            pagination_warning = f"Sprint-issues pagination iteration cap ({MAX_PAGINATION_ITERATIONS}) exceeded — bailing"
-            break
-        resp = ctx.query(
-            _SPRINT_ISSUES_PAGE_QUERY,
-            {
-                "sprintId": sprint_id,
-                "after": cursor,
-                "workspaceId": ctx.workspace_id,
-            },
+    def fetch_page(after: str | None) -> tuple[list[dict], PageInfo]:
+        node = as_dict(
+            ctx.execute_path(
+                _SPRINT_ISSUES_PAGE_QUERY,
+                {
+                    "sprintId": sprint_id,
+                    "after": after,
+                    "workspaceId": ctx.workspace_id,
+                },
+                "node",
+                context="sprint_issues_page",
+            ),
         )
-        check_graphql_errors(resp, context="sprint_issues_page")
-        data = resp.get("data") or {}
-        if "node" not in data or data.get("node") is None:
+        if not node:
             raise ZhApiError(f"Sprint {sprint_id!r} resolved to null in sprintIssues walk (deleted, ACL-revoked, or otherwise inaccessible)")
-        node = data["node"]
-        conn = node.get("sprintIssues") or {}
+        conn = as_dict(node.get("sprintIssues"))
+        page_items: list[dict] = []
         _collect_sprint_issue_page_nodes(
             conn,
-            out=out,
+            out=page_items,
             walked_numbers=walked_numbers,
             owner_repo=ctx.owner_repo,
         )
-        page_info = conn.get("pageInfo") or {}
-        if not page_info.get("hasNextPage"):
-            break
-        end_cursor = page_info.get("endCursor")
-        if not end_cursor or end_cursor == last_cursor:
-            pagination_warning = "Sprint-issues pagination cursor not advancing — server likely mis-reporting hasNextPage. Bailing."
-            break
-        last_cursor = end_cursor
-        cursor = end_cursor
+        return page_items, cast(PageInfo, as_dict(conn.get("pageInfo")))
 
+    out, pagination_warning = paginate_pages(
+        fetch_page,
+        max_pages=MAX_PAGINATION_ITERATIONS,
+        stuck_warning="Sprint-issues pagination cursor not advancing — server likely mis-reporting hasNextPage. Bailing.",
+        cap_warning=f"Sprint-issues pagination iteration cap ({MAX_PAGINATION_ITERATIONS}) exceeded — bailing",
+    )
     return out, walked_numbers, pagination_warning
 
 
@@ -1225,9 +1011,14 @@ def get_sprint_detail(ctx: RepoContext, sprint_name: str) -> SprintDetailResult:
             "error": err,
         }
 
-    header_resp = ctx.query(_SPRINT_HEADER_QUERY, {"sprintId": sprint_id})
-    check_graphql_errors(header_resp, context="sprint_header")
-    node = (header_resp.get("data") or {}).get("node") or {}
+    node = as_dict(
+        ctx.execute_path(
+            _SPRINT_HEADER_QUERY,
+            {"sprintId": sprint_id},
+            "node",
+            context="sprint_header",
+        ),
+    )
 
     issues, _walked_numbers, pagination_warning = _walk_sprint_issues(ctx, sprint_id)
 
@@ -1256,38 +1047,9 @@ def get_current_sprint(ctx: RepoContext) -> SprintDetailResult:
     return get_sprint_detail(ctx, "current")
 
 
-_ADD_ISSUES_TO_SPRINTS_MUTATION = """
-mutation($input: AddIssuesToSprintsInput!) {
-  addIssuesToSprints(input: $input) {
-    sprintIssues {
-      id
-      issue {
-        number
-        repository { ownerName name }
-      }
-      sprint { id }
-    }
-  }
-}
-"""
+_ADD_ISSUES_TO_SPRINTS_MUTATION = op("sprints", "AddIssuesToSprints")
 
-_REMOVE_ISSUES_FROM_SPRINTS_MUTATION = """
-mutation($input: RemoveIssuesFromSprintsInput!) {
-  removeIssuesFromSprints(input: $input) {
-    sprints {
-      id
-      sprintIssues(first: 100) {
-        nodes {
-          issue {
-            number
-            repository { ownerName name }
-          }
-        }
-      }
-    }
-  }
-}
-"""
+_REMOVE_ISSUES_FROM_SPRINTS_MUTATION = op("sprints", "RemoveIssuesFromSprints")
 
 
 def _resolve_issue_ids_in_repo(ctx: RepoContext, issue_numbers: list[int]) -> tuple[dict[int, str], list[int]]:
@@ -1512,7 +1274,7 @@ def add_issues_to_sprint(ctx: RepoContext, sprint_name: str, issue_numbers: list
             "error": ("Some issue numbers were not found in this repository: " + ", ".join(f"#{n}" for n in missing)),
         }
 
-    resp = ctx.query(
+    data = ctx.execute(
         _ADD_ISSUES_TO_SPRINTS_MUTATION,
         {
             "input": {
@@ -1520,9 +1282,9 @@ def add_issues_to_sprint(ctx: RepoContext, sprint_name: str, issue_numbers: list
                 "sprintIds": [sprint_id],
             }
         },
+        context="addIssuesToSprints",
     )
-    check_graphql_errors(resp, context="addIssuesToSprints")
-    payload = (resp.get("data") or {}).get("addIssuesToSprints") or {}
+    payload = as_dict(data_get(data, "addIssuesToSprints"))
     returned_links = payload.get("sprintIssues") or []
     succeeded_numbers = _succeeded_numbers_from_add_sprint_links(
         returned_links,
@@ -1602,7 +1364,7 @@ def remove_issues_from_sprint(ctx: RepoContext, sprint_name: str, issue_numbers:
             "error": ("Some issue numbers were not found in this repository: " + ", ".join(f"#{n}" for n in missing)),
         }
 
-    resp = ctx.query(
+    data = ctx.execute(
         _REMOVE_ISSUES_FROM_SPRINTS_MUTATION,
         {
             "input": {
@@ -1610,9 +1372,9 @@ def remove_issues_from_sprint(ctx: RepoContext, sprint_name: str, issue_numbers:
                 "sprintIds": [sprint_id],
             }
         },
+        context="removeIssuesFromSprints",
     )
-    check_graphql_errors(resp, context="removeIssuesFromSprints")
-    payload = (resp.get("data") or {}).get("removeIssuesFromSprints") or {}
+    payload = as_dict(data_get(data, "removeIssuesFromSprints"))
     sprints_after = payload.get("sprints") or []
 
     target_sprint = next(

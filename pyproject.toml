@@ -8,6 +8,8 @@ license = { text = "MIT" }
 authors = [{ name = "zenhub-cli contributors" }]
 dependencies = [
     "click>=8.0",
+    "diskcache>=5.6.3",
+    "httpx>=0.28.1",
     "loguru>=0.7",
     "numpy>=1.26",
     "rich>=13.7",
@@ -30,6 +32,15 @@ version-file = "src/zh/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/zh"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/zh/operations/deps.graphql" = "zh/operations/deps.graphql"
+"src/zh/operations/issues.graphql" = "zh/operations/issues.graphql"
+"src/zh/operations/planning.graphql" = "zh/operations/planning.graphql"
+"src/zh/operations/repo.graphql" = "zh/operations/repo.graphql"
+"src/zh/operations/sprints.graphql" = "zh/operations/sprints.graphql"
+"src/zh/operations/subissues.graphql" = "zh/operations/subissues.graphql"
+"src/zh/operations/workspace.graphql" = "zh/operations/workspace.graphql"
 
 [dependency-groups]
 dev = [
@@ -87,7 +98,7 @@ ignore = [
 max-complexity = 8
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["ARG", "PLR2004", "S101"]
+"tests/**" = ["ARG", "PLR2004", "S101", "S106"]
 
 [tool.basedpyright]
 include = ["src"]

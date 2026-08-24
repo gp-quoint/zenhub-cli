@@ -25,17 +25,17 @@ def _ctx() -> zh_api.RepoContext:
 
 
 def _patch_ctx_query(ctx: zh_api.RepoContext, responses: list[dict]):
-    """Replace ctx.query with a generator over `responses`.
+    """Replace ctx.execute with a generator over `responses`.
 
-    Each successive `ctx.query(...)` call consumes one entry. A test
+    Each successive `ctx.execute(...)` call consumes one entry. A test
     that under-supplies responses will get a StopIteration — the loud
     failure is intentional.
     """
     it = iter(responses)
     return patch.object(
         ctx,
-        "query",
-        side_effect=lambda query, variables=None: next(it),
+        "execute",
+        side_effect=lambda *args, **kwargs: next(it)["data"],
     )
 
 

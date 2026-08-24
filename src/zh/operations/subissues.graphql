@@ -1,0 +1,64 @@
+# Sub-issue list + mutations
+
+query ListSubIssues($repoId: ID!, $issueNumber: Int!, $workspaceId: ID!, $after: String) {
+  issueByInfo(repositoryId: $repoId, issueNumber: $issueNumber) {
+    number
+    title
+    state
+    githubChildIssues(first: 100, after: $after) {
+      totalCount
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        id
+        number
+        title
+        state
+        assignees {
+          nodes { login }
+        }
+        pipelineIssue(workspaceId: $workspaceId) {
+          pipeline { name }
+        }
+        pipelineIssues {
+          nodes { pipeline { name } }
+        }
+        repository {
+          ownerName
+          name
+        }
+      }
+    }
+  }
+}
+
+mutation AddSubIssues($input: AddSubIssuesInput!) {
+  addSubIssues(input: $input) {
+    successCount
+    failedIssues {
+      number
+      repository { ownerName name }
+    }
+    githubErrors
+  }
+}
+
+mutation RemoveSubIssues($input: RemoveSubIssuesInput!) {
+  removeSubIssues(input: $input) {
+    successCount
+    failedIssues {
+      number
+      repository { ownerName name }
+    }
+    githubErrors
+  }
+}
+
+mutation ReprioritizeSubIssue($input: ReprioritizeSubIssueInput!) {
+  reprioritizeSubIssue(input: $input) {
+    success
+    githubErrors
+  }
+}

@@ -1,24 +1,30 @@
-"""Direct ZenHub GraphQL client (stdlib urllib; no third-party HTTP deps).
+"""Direct ZenHub GraphQL client (httpx).
 
-Auth and repo/workspace resolution mirror ``~/.config/zh/config`` and bash ``zh``.
+Auth and repo/workspace resolution mirror ``~/.config/zh/config``.
 """
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import subprocess
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, cast
 
-from zh._http import assert_https_url, urlopen_https
+from zh._http import request_json
 from zh.errors import ZhApiError
-from zh.graphql_cache import cached_graphql_read, invalidate_graphql_read_caches, is_graphql_mutation
+from zh.graphql_cache import (
+    cached_graphql_read,
+    clear_process_read_cache,
+    close_disk_cache,
+    invalidate_graphql_read_caches,
+    is_graphql_mutation,
+)
+from zh.graphql_helpers import PageInfo, paginate_pages
+from zh.json_helpers import as_dict, as_list, data_get, dict_nodes
+from zh.operations import op
 from zh.schemas import WorkspaceRow
 
 type JsonDict = dict[str, Any]
@@ -128,10 +134,10 @@ def graphql_request(
 ) -> JsonDict:
     """Send a GraphQL request and return the parsed JSON response.
 
-    Read-only queries use an in-process cache and, when ``bkt`` is installed,
-    a cross-invocation subprocess cache (see ``ZH_BKT*`` env vars). Mutations
-    always hit the network directly and invalidate read caches so the next
-    ``zh pipeline`` / ``zh sprint`` sees fresh membership.
+    Read-only queries use an in-process memo (L1) and, unless disabled, a
+    ``diskcache`` on-disk store (L2; see ``ZH_GRAPHQL_CACHE*``). Mutations
+    always hit the network and invalidate caches so the next ``zh pipeline``
+    / ``zh sprint`` sees fresh membership.
     """
     if token is None:
         token = resolve_token()
@@ -158,36 +164,23 @@ def _graphql_request_direct(
     url: str = ZH_GRAPHQL_URL,
 ) -> JsonDict:
     """Send a GraphQL request without read caches."""
-    assert_https_url(url)
     payload: dict[str, str | GraphQLVariables] = {"query": query}
     if variables is not None:
         payload["variables"] = variables
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(  # noqa: S310
+    result = request_json(
+        "POST",
         url,
-        data=data,
         headers={
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
             "Accept": "application/json",
         },
-        method="POST",
+        json_body=payload,
+        timeout=timeout,
     )
-    try:
-        with urlopen_https(req, timeout=timeout) as resp:
-            body = resp.read().decode("utf-8")
-    except urllib.error.HTTPError as e:
-        try:
-            err_body = e.read().decode("utf-8", errors="replace")
-        except OSError:
-            err_body = ""
-        raise ZhApiError(f"HTTP {e.code} from ZenHub GraphQL: {err_body or e.reason}") from e
-    except urllib.error.URLError as e:
-        raise ZhApiError(f"Transport error to ZenHub GraphQL: {e.reason}") from e
-    try:
-        return json.loads(body)
-    except json.JSONDecodeError as e:
-        raise ZhApiError(f"Non-JSON response from ZenHub: {body[:200]!r}") from e
+    if not isinstance(result, dict):
+        raise ZhApiError(f"Unexpected GraphQL JSON shape from ZenHub: {type(result).__name__}")
+    return cast(JsonDict, result)
 
 
 def check_graphql_errors(response: JsonDict, *, context: str = "") -> None:
@@ -202,6 +195,22 @@ def check_graphql_errors(response: JsonDict, *, context: str = "") -> None:
         msg = "; ".join(e.get("message", str(e)) for e in errors if isinstance(e, dict))
         prefix = f"{context}: " if context else ""
         raise ZhApiError(f"{prefix}GraphQL errors: {msg or errors}")
+
+
+def graphql_execute(
+    query: str,
+    variables: GraphQLVariables | None = None,
+    *,
+    token: str | None = None,
+    timeout: float = 30.0,
+    url: str = ZH_GRAPHQL_URL,
+    context: str = "",
+) -> JsonDict:
+    """Send a GraphQL request, raise on top-level errors, return ``data``."""
+    resp = graphql_request(query, variables, token=token, timeout=timeout, url=url)
+    check_graphql_errors(resp, context=context)
+    data = resp.get("data")
+    return cast(JsonDict, data) if isinstance(data, dict) else {}
 
 
 _GH_URL_RE = re.compile(
@@ -269,37 +278,26 @@ def _cached_gh_repo_id(owner_repo_key: str) -> int:
 
 def _fetch_gh_repo_id(owner_repo: str, gh_token: str) -> int:
     url = f"https://api.github.com/repos/{owner_repo}"
-    assert_https_url(url)
-    req = urllib.request.Request(
+    body = request_json(
+        "GET",
         url,
         headers={
             "Authorization": f"token {gh_token}",
             "Accept": "application/vnd.github+json",
         },
+        timeout=15.0,
     )
-    try:
-        with urlopen_https(req, timeout=15.0) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        raise ZhApiError(f"GitHub API HTTP {e.code} for repos/{owner_repo}: {e.reason}") from e
-    except urllib.error.URLError as e:
-        raise ZhApiError(f"GitHub API transport error: {e.reason}") from e
-
+    if not isinstance(body, dict):
+        raise ZhApiError(f"GitHub API returned non-object JSON for repos/{owner_repo}")
     repo_id = body.get("id")
     if not isinstance(repo_id, int):
         raise ZhApiError(f"GitHub API returned no numeric id for repos/{owner_repo}")
     return repo_id
 
 
-_REPO_ID_QUERY = """
-query($ghIds: [Int!]!) {
-  repositoriesByGhId(ghIds: $ghIds) {
-    id
-    name
-    ownerName
-  }
-}
-"""
+_REPO_ID_QUERY = op("repo", "RepositoriesByGhId")
+_WORKSPACE_QUERY = op("repo", "WorkspacesConnection")
+_WORKSPACE_PAGINATION_CAP = 50  # 50 pages x 50 nodes
 
 
 def get_zenhub_repo_id(
@@ -319,30 +317,11 @@ def get_zenhub_repo_id(
 
 @lru_cache(maxsize=32)
 def _cached_zenhub_repo_id(gh_id: int, token: str) -> str:
-    resp = graphql_request(_REPO_ID_QUERY, {"ghIds": [gh_id]}, token=token)
-    check_graphql_errors(resp, context="repositoriesByGhId")
-    nodes = (resp.get("data") or {}).get("repositoriesByGhId") or []
+    data = graphql_execute(_REPO_ID_QUERY, {"ghIds": [gh_id]}, token=token, context="repositoriesByGhId")
+    nodes = data.get("repositoriesByGhId") or []
     if not nodes:
         raise ZhApiError(f"No ZenHub repository found for GitHub repo id {gh_id}. Connect the repo to a ZenHub workspace first.")
     return nodes[0]["id"]
-
-
-_WORKSPACE_QUERY = """
-query($ghIds: [Int!]!, $after: String) {
-  repositoriesByGhId(ghIds: $ghIds) {
-    id
-    workspacesConnection(first: 50, after: $after) {
-      pageInfo { hasNextPage endCursor }
-      nodes {
-        id
-        name
-      }
-    }
-  }
-}
-"""
-
-_WORKSPACE_PAGINATION_CAP = 50  # 50 pages × 50 nodes
 
 
 def list_workspaces(
@@ -361,38 +340,27 @@ def list_workspaces(
 
 
 @lru_cache(maxsize=32)
-def _cached_workspaces(gh_id: int, token: str) -> tuple[tuple[tuple[str, str | None], ...], ...]:
-    cursor: str | None = None
-    last_cursor: str | None = None
-    iterations = 0
-    out: list[WorkspaceRow] = []
+def _cached_workspaces(gh_id: int, token: str) -> tuple[tuple[str, str | None], ...]:
+    repository_found = False
 
-    while True:
-        iterations += 1
-        if iterations > _WORKSPACE_PAGINATION_CAP:
-            break
-        resp = graphql_request(
+    def fetch_page(after: str | None) -> tuple[list[WorkspaceRow], PageInfo]:
+        nonlocal repository_found
+        data = graphql_execute(
             _WORKSPACE_QUERY,
-            {"ghIds": [gh_id], "after": cursor},
+            {"ghIds": [gh_id], "after": after},
             token=token,
+            context="workspacesConnection",
         )
-        check_graphql_errors(resp, context="workspacesConnection")
-        repos = (resp.get("data") or {}).get("repositoriesByGhId") or []
+        repos = as_list(data.get("repositoriesByGhId"))
         if not repos:
-            if not out:
-                raise ZhApiError(f"No ZenHub repository found for GitHub repo id {gh_id}")
-            break
-        conn = repos[0].get("workspacesConnection") or {}
-        for n in conn.get("nodes") or []:
-            out.append(cast(WorkspaceRow, n))
-        page_info = conn.get("pageInfo") or {}
-        if not page_info.get("hasNextPage"):
-            break
-        end_cursor = page_info.get("endCursor")
-        if not end_cursor or end_cursor == last_cursor:
-            break
-        last_cursor = end_cursor
-        cursor = end_cursor
+            return [], {}
+        repository_found = True
+        conn = as_dict(as_dict(repos[0]).get("workspacesConnection"))
+        return [cast(WorkspaceRow, node) for node in dict_nodes(conn.get("nodes"))], cast(PageInfo, as_dict(conn.get("pageInfo")))
+
+    out, _warning = paginate_pages(fetch_page, max_pages=_WORKSPACE_PAGINATION_CAP)
+    if not repository_found:
+        raise ZhApiError(f"No ZenHub repository found for GitHub repo id {gh_id}")
 
     return tuple((str(row.get("id") or ""), row.get("name")) for row in out)
 
@@ -420,31 +388,6 @@ def get_workspace_id(
     return str(nodes[0]["id"])
 
 
-_ISSUE_BY_INFO_QUERY = """
-query($repoId: ID!, $issueNumber: Int!) {
-  issueByInfo(repositoryId: $repoId, issueNumber: $issueNumber) {
-    id
-    number
-    title
-    state
-    repository {
-      ownerName
-      name
-    }
-    parentIssue {
-      id
-      number
-      title
-      repository {
-        ownerName
-        name
-      }
-    }
-  }
-}
-"""
-
-
 def repos_match(a: dict | None, owner_repo: str) -> bool:
     """Case-insensitive ``repository`` node vs ``owner/repo``."""
     if not a:
@@ -463,7 +406,36 @@ class RepoContext:
     token: str
 
     def query(self, query: str, variables: GraphQLVariables | None = None) -> JsonDict:
+        """Return the full GraphQL envelope (``data`` + optional ``errors``)."""
         return graphql_request(query, variables, token=self.token)
+
+    def execute(
+        self,
+        query: str,
+        variables: GraphQLVariables | None = None,
+        *,
+        context: str = "",
+    ) -> JsonDict:
+        """POST, raise on GraphQL errors, return ``data`` (or ``{}``).
+
+        Routes through :meth:`query` so tests that patch ``ctx.query`` keep working.
+        """
+        response = self.query(query, variables)
+        check_graphql_errors(response, context=context)
+        return as_dict(response.get("data"))
+
+    def execute_path(
+        self,
+        query: str,
+        variables: GraphQLVariables | None,
+        *keys: str,
+        context: str = "",
+    ) -> Any:
+        """Like ``execute``, then walk ``data`` by ``keys`` (missing → None)."""
+        data = self.execute(query, variables, context=context)
+        if not keys:
+            return data
+        return data_get(data, *keys)
 
 
 def resolve_context(
@@ -511,3 +483,5 @@ def clear_api_caches() -> None:
     _cached_gh_repo_id.cache_clear()
     _cached_zenhub_repo_id.cache_clear()
     _cached_workspaces.cache_clear()
+    clear_process_read_cache()
+    close_disk_cache()

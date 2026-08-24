@@ -1,0 +1,22 @@
+# Repo / workspace resolution
+
+query RepositoriesByGhId($ghIds: [Int!]!) {
+  repositoriesByGhId(ghIds: $ghIds) {
+    id
+    name
+    ownerName
+  }
+}
+
+query WorkspacesConnection($ghIds: [Int!]!, $after: String) {
+  repositoriesByGhId(ghIds: $ghIds) {
+    id
+    workspacesConnection(first: 50, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        id
+        name
+      }
+    }
+  }
+}

@@ -69,10 +69,10 @@ zh comment edit 42 2 --fill PYTHON_PR=https://github.com/org/py/pull/1 \
 | `ZH_WORKSPACE` | Default workspace name; overridden by `-w` |
 | `ZH_TOKEN` | GraphQL API token |
 | `ZH_REST_TOKEN` | REST token (required for `zh unblock` only) |
-| `ZH_BKT=0` | Disable `bkt` caching of read-only GraphQL |
-| `ZH_BKT_TTL` | Cache TTL (default `5m`) |
-| `ZH_BKT_FORCE=1` | Bust GraphQL cache for this process |
-| `ZH_GRAPHQL_CACHE_GEN` | Override mutation gen-file path (default `~/.cache/zh/graphql-cache.gen`); mutations bump it so `bkt` misses stale reads |
+| `ZH_GRAPHQL_CACHE=0` | Disable on-disk GraphQL read cache (L1 in-process remains) |
+| `ZH_GRAPHQL_CACHE_TTL` | L2 TTL (default `5m`) |
+| `ZH_GRAPHQL_CACHE_FORCE=1` | Skip L2 for this process |
+| `ZH_GRAPHQL_CACHE_DIR` | Override L2 directory |
 
 Precedence: **flag > env / config > git-remote + first-workspace fallback**. Use `-w` when a repo connects to multiple workspaces.
 
@@ -221,7 +221,7 @@ Hidden aliases: `subissues`, `sub`, `subissues`/`sub` as root typer names.
 
 `--json` on add/remove: `{ok, sprint, issues, success_count, outcome, message}`.
 
-Mutations report per-issue success/failure counts. GraphQL read caches are invalidated on every mutation, so a follow-up `zh sprint` / `zh pipeline` sees membership changes without `ZH_BKT_FORCE=1`. If an add still fails, investigate via `zh sprint --json` — the API doesn't distinguish reasons (already-in-sprint, archived, ineligible).
+Mutations report per-issue success/failure counts. GraphQL read caches are invalidated on every mutation, so a follow-up `zh sprint` / `zh pipeline` sees membership changes without `ZH_GRAPHQL_CACHE_FORCE=1`. If an add still fails, investigate via `zh sprint --json` — the API doesn't distinguish reasons (already-in-sprint, archived, ineligible).
 
 **Not exposed:** sprint creation, date changes, or completion flows. Escalate to the user rather than hitting the API directly.
 

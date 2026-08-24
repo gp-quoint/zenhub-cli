@@ -1,0 +1,64 @@
+# Workspace board / discovery reads
+
+query PipelinesOpen($workspaceId: ID!) {
+  workspace(id: $workspaceId) {
+    name
+    pipelinesConnection {
+      nodes { id name issues(state: OPEN) { totalCount } }
+    }
+  }
+}
+
+query PipelinesAll($workspaceId: ID!) {
+  workspace(id: $workspaceId) {
+    name
+    pipelinesConnection {
+      nodes { id name issues { totalCount } }
+    }
+  }
+}
+
+query PipelinesOrder($workspaceId: ID!) {
+  workspace(id: $workspaceId) {
+    pipelinesConnection {
+      nodes { name }
+    }
+  }
+}
+
+query AssignableIssueTypes($ghIds: [Int!]!, $workspaceId: ID!) {
+  repositoriesByGhId(ghIds: $ghIds) {
+    assignableIssueTypes(workspaceId: $workspaceId, first: 100) {
+      nodes {
+        __typename
+        ... on GithubIssueType { id name level disposition isEnabled }
+        ... on ZenhubIssueType { id name level disposition isEnabled }
+      }
+    }
+  }
+}
+
+query Priorities($workspaceId: ID!) {
+  workspace(id: $workspaceId) {
+    prioritiesConnection { nodes { id name color } }
+  }
+}
+
+query Labels($ghIds: [Int!]!) {
+  repositoriesByGhId(ghIds: $ghIds) {
+    labels(first: 100) { nodes { name color } }
+  }
+}
+
+query SearchIssuesByPipeline($pipelineId: ID!, $workspaceId: ID!, $filters: IssueSearchFiltersInput!) {
+  searchIssuesByPipeline(pipelineId: $pipelineId, filters: $filters, first: 50) {
+    nodes {
+      number
+      title
+      estimate { value }
+      assignees { nodes { login } }
+      repository { ownerName name }
+      zenhubUrl(workspaceId: $workspaceId)
+    }
+  }
+}

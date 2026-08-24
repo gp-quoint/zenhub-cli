@@ -1,0 +1,115 @@
+# Sprint list / detail / membership
+
+query SprintsOpen($workspaceId: ID!, $after: String) {
+  workspace(id: $workspaceId) {
+    id
+    name
+    activeSprint { id name }
+    sprints(first: 50, after: $after, filters: { state: { eq: OPEN } }) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        id
+        name
+        state
+        startAt
+        endAt
+        completedPoints
+        totalPoints
+        closedIssuesCount
+      }
+    }
+  }
+}
+
+query SprintsAll($workspaceId: ID!, $after: String) {
+  workspace(id: $workspaceId) {
+    id
+    name
+    activeSprint { id name }
+    sprints(first: 50, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        id
+        name
+        state
+        startAt
+        endAt
+        completedPoints
+        totalPoints
+        closedIssuesCount
+      }
+    }
+  }
+}
+
+query SprintHeader($sprintId: ID!) {
+  node(id: $sprintId) {
+    ... on Sprint {
+      id
+      name
+      description
+      state
+      startAt
+      endAt
+      completedPoints
+      totalPoints
+      closedIssuesCount
+    }
+  }
+}
+
+query SprintIssuesPage($sprintId: ID!, $after: String, $workspaceId: ID!) {
+  node(id: $sprintId) {
+    ... on Sprint {
+      sprintIssues(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          issue {
+            number
+            title
+            state
+            htmlUrl
+            estimate { value }
+            assignees { nodes { login } }
+            repository { ownerName name }
+            pipelineIssue(workspaceId: $workspaceId) {
+              pipeline { name }
+            }
+            pipelineIssues {
+              nodes { pipeline { name } }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+mutation AddIssuesToSprints($input: AddIssuesToSprintsInput!) {
+  addIssuesToSprints(input: $input) {
+    sprintIssues {
+      id
+      issue {
+        number
+        repository { ownerName name }
+      }
+      sprint { id }
+    }
+  }
+}
+
+mutation RemoveIssuesFromSprints($input: RemoveIssuesFromSprintsInput!) {
+  removeIssuesFromSprints(input: $input) {
+    sprints {
+      id
+      sprintIssues(first: 100) {
+        nodes {
+          issue {
+            number
+            repository { ownerName name }
+          }
+        }
+      }
+    }
+  }
+}

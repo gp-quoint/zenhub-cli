@@ -2,20 +2,12 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
-
 import pytest
+from tests._fixtures import make_ctx
 from typer.testing import CliRunner
 
-from tests._fixtures import make_ctx
-from zh.api import ZhApiError, graphql_request
+from zh.api import ZhApiError, clear_api_caches, graphql_request
 from zh.cli.main import app
-from zh.graphql_cache import (
-    bump_graphql_cache_gen,
-    clear_process_read_cache,
-    graphql_cache_gen_path,
-    invalidate_graphql_read_caches,
-)
 from zh.issue_ops import move_issue
 from zh.workspace_ops import find_pipeline_id, resolve_pipeline
 
@@ -106,7 +98,7 @@ def test_move_issue_reports_real_from_pipeline(monkeypatch: pytest.MonkeyPatch) 
             }
         return {"data": {"issueByInfo": {"id": "issue-1", "number": 42, "title": "Libs"}}}
 
-    monkeypatch.setattr(ctx, "query", _query)
+    monkeypatch.setattr(ctx, "execute", lambda query, variables=None, **_: _query(query, variables)["data"])
     monkeypatch.setattr("zh.issue_ops.find_pipeline_id", lambda _c, _n: "p-ip")
     monkeypatch.setattr(
         "zh.issue_ops.get_issue_by_info",
@@ -164,11 +156,9 @@ def test_sprint_show_via_default_command(runner: CliRunner, monkeypatch: pytest.
     assert "#1" in result.output
 
 
-def test_mutation_invalidates_process_read_cache(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    clear_process_read_cache()
-    gen = tmp_path / "gen"
-    monkeypatch.setenv("ZH_GRAPHQL_CACHE_GEN", str(gen))
-    monkeypatch.setenv("ZH_BKT", "0")
+def test_mutation_invalidates_process_read_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ZH_GRAPHQL_CACHE", "0")
+    clear_api_caches()
     calls = 0
 
     def _direct(query, variables=None, *, token, timeout=30.0, url=None):
@@ -184,19 +174,6 @@ def test_mutation_invalidates_process_read_cache(monkeypatch: pytest.MonkeyPatch
 
     graphql_request("mutation { x }", {}, token="tok")
     assert calls == 2
-    assert gen.exists()
 
     graphql_request("query { viewer { id } }", {}, token="tok")
     assert calls == 3
-
-
-def test_bump_graphql_cache_gen_changes_mtime(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    gen = tmp_path / "gen"
-    monkeypatch.setenv("ZH_GRAPHQL_CACHE_GEN", str(gen))
-    invalidate_graphql_read_caches()
-    first = gen.read_text(encoding="utf-8")
-    m1 = gen.stat().st_mtime_ns
-    bump_graphql_cache_gen()
-    assert gen.read_text(encoding="utf-8") != first or gen.stat().st_mtime_ns >= m1
-    assert int(gen.read_text(encoding="utf-8").strip()) >= 1
-    assert graphql_cache_gen_path() == gen
