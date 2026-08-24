@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
+# Opaque JSON blobs. Prefer TypedDict at API boundaries; use as_dict / as_list /
+# json_int / json_str to narrow. Mapping (not dict) keeps GraphQL variable
+# literals assignable despite list invariance.
+type JsonValue = object
 type JsonDict = dict[str, object]
-type GraphQLVariables = dict[str, object]
+type GraphQLVariables = Mapping[str, object]
 
 
 def sprint_key(name: str | None) -> str:

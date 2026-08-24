@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, NotRequired, TypedDict
+from typing import Literal, NotRequired, TypedDict
+
+from zh.types import JsonDict
 
 Outcome = Literal["ok", "partial", "fail", "noop"]
 DuplicateRecommendation = Literal["create", "warn", "block"]
@@ -19,10 +21,12 @@ class IssueInfo(TypedDict, total=False):
     title: str
     state: str
     body: str
-    issueType: dict[str, Any]
-    assignees: dict[str, Any]
-    pipelineIssues: dict[str, Any]
-    estimate: dict[str, Any]
+    issueType: JsonDict
+    assignees: JsonDict
+    pipelineIssues: JsonDict
+    estimate: JsonDict
+    htmlUrl: str
+    parentIssue: JsonDict
 
 
 class SubIssueChild(TypedDict, total=False):
@@ -48,20 +52,44 @@ class SubIssueListResult(TypedDict, total=False):
     error: str
 
 
+class FailedIssueRef(TypedDict, total=False):
+    number: int | None
+    owner: str
+    name: str
+
+
+class CrossRepoChild(TypedDict):
+    number: int
+    owner: str
+    name: str
+
+
+class WrongParentChild(TypedDict):
+    number: int
+    actual_parent: int | None
+
+
 class MutationResult(TypedDict, total=False):
     ok: bool
     parent_number: int
+    child_number: int
+    position: str
     outcome: Outcome
     success_count: int
     failed_count: int
     succeeded: list[int]
-    failed: list[dict[str, Any]]
+    failed: list[FailedIssueRef | int]
     unaccounted: list[int]
     failed_unknown_count: int
-    github_errors: dict[str, Any] | None
+    github_errors: JsonDict | None
     partial_success_warning: str | None
-    error: str
-    message: str
+    error: str | None
+    message: str | None
+    sprint_id: str
+    sprint_name: str
+    inspected_full: bool
+    pagination_warning: str | None
+    response_anomaly: str | None
 
 
 class DuplicateMatch(TypedDict, total=False):
@@ -142,22 +170,40 @@ class LabelRow(TypedDict, total=False):
 class PipelineNode(TypedDict, total=False):
     id: str
     name: str
-    issues: dict[str, Any]
+    issues: JsonDict
 
 
 class SprintRow(TypedDict, total=False):
     id: str
     name: str
+    state: str
+    start_at: str | None
+    end_at: str | None
+    completed_points: float
+    total_points: float
+    closed_issues_count: int
+    is_active: bool
+    # Legacy alias used by some callers; prefer is_active.
     active: bool
 
 
 class SprintIssueRow(TypedDict, total=False):
     number: int
     title: str
+    state: str
+    html_url: str
+    estimate: float | None
+    assignees: list[str]
+    pipeline: str | None
+    repository: dict[str, str]
 
 
 class SprintListResult(TypedDict, total=False):
+    ok: bool
+    workspace_name: str
+    active_sprint_id: str | None
     sprints: list[SprintRow]
+    pagination_warning: str | None
 
 
 class SprintDetailResult(TypedDict, total=False):
@@ -230,7 +276,7 @@ class PlanningListItem(TypedDict, total=False):
     number: int
     title: str
     state: str
-    repository: dict[str, Any]
+    repository: dict[str, str]
 
 
 class PlanningListResult(TypedDict):
@@ -258,16 +304,16 @@ class PlanningShowResult(TypedDict, total=False):
     children: list[PlanningChildRow]
 
 
-class GhIssue(TypedDict, total=False):
-    title: str
-    body: str
-    state: str
-    url: str
-    comments: list[dict[str, Any]]
-
-
 class GhComment(TypedDict, total=False):
     id: int
     user: str
     created: str
     body: str
+
+
+class GhIssue(TypedDict, total=False):
+    title: str
+    body: str
+    state: str
+    url: str
+    comments: list[GhComment]

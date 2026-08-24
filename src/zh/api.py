@@ -11,7 +11,7 @@ import subprocess
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 from zh._http import request_json
 from zh.errors import ZhApiError
@@ -26,9 +26,7 @@ from zh.graphql_helpers import PageInfo, paginate_pages
 from zh.json_helpers import as_dict, as_list, data_get, dict_nodes
 from zh.operations import op
 from zh.schemas import WorkspaceRow
-
-type JsonDict = dict[str, Any]
-type GraphQLVariables = dict[str, Any]
+from zh.types import GraphQLVariables, JsonDict, JsonValue
 
 DEFAULT_CONFIG_PATH = Path.home() / ".config" / "zh" / "config"
 ZH_GRAPHQL_URL = "https://api.zenhub.com/public/graphql"
@@ -164,7 +162,7 @@ def _graphql_request_direct(
     url: str = ZH_GRAPHQL_URL,
 ) -> JsonDict:
     """Send a GraphQL request without read caches."""
-    payload: dict[str, str | GraphQLVariables] = {"query": query}
+    payload: JsonDict = {"query": query}
     if variables is not None:
         payload["variables"] = variables
     result = request_json(
@@ -190,9 +188,9 @@ def check_graphql_errors(response: JsonDict, *, context: str = "") -> None:
     `errors` is present. For mutations and structural queries the MCP
     relies on, we treat any top-level error as fatal.
     """
-    errors = response.get("errors") or []
+    errors = as_list(response.get("errors"))
     if errors:
-        msg = "; ".join(e.get("message", str(e)) for e in errors if isinstance(e, dict))
+        msg = "; ".join(str(as_dict(e).get("message") or e) for e in errors if isinstance(e, dict))
         prefix = f"{context}: " if context else ""
         raise ZhApiError(f"{prefix}GraphQL errors: {msg or errors}")
 
@@ -289,7 +287,7 @@ def _fetch_gh_repo_id(owner_repo: str, gh_token: str) -> int:
     )
     if not isinstance(body, dict):
         raise ZhApiError(f"GitHub API returned non-object JSON for repos/{owner_repo}")
-    repo_id = body.get("id")
+    repo_id = cast(JsonDict, body).get("id")
     if not isinstance(repo_id, int):
         raise ZhApiError(f"GitHub API returned no numeric id for repos/{owner_repo}")
     return repo_id
@@ -318,10 +316,13 @@ def get_zenhub_repo_id(
 @lru_cache(maxsize=32)
 def _cached_zenhub_repo_id(gh_id: int, token: str) -> str:
     data = graphql_execute(_REPO_ID_QUERY, {"ghIds": [gh_id]}, token=token, context="repositoriesByGhId")
-    nodes = data.get("repositoriesByGhId") or []
+    nodes = dict_nodes(data.get("repositoriesByGhId"))
     if not nodes:
         raise ZhApiError(f"No ZenHub repository found for GitHub repo id {gh_id}. Connect the repo to a ZenHub workspace first.")
-    return nodes[0]["id"]
+    repo_id = nodes[0].get("id")
+    if not isinstance(repo_id, str) or not repo_id:
+        raise ZhApiError(f"No ZenHub repository found for GitHub repo id {gh_id}. Connect the repo to a ZenHub workspace first.")
+    return repo_id
 
 
 def list_workspaces(
@@ -336,7 +337,7 @@ def list_workspaces(
         token = resolve_token()
     if gh_id is None:
         gh_id = get_gh_repo_id(owner_repo, gh_token=gh_token)
-    return [{"id": row[0], "name": row[1]} for row in _cached_workspaces(gh_id, token)]
+    return [{"id": row[0], "name": row[1] or ""} for row in _cached_workspaces(gh_id, token)]
 
 
 @lru_cache(maxsize=32)
@@ -388,12 +389,12 @@ def get_workspace_id(
     return str(nodes[0]["id"])
 
 
-def repos_match(a: dict | None, owner_repo: str) -> bool:
+def repos_match(a: JsonDict | dict[str, object] | None, owner_repo: str) -> bool:
     """Case-insensitive ``repository`` node vs ``owner/repo``."""
     if not a:
         return False
     owner, _, repo = owner_repo.partition("/")
-    return (a.get("ownerName") or "").lower() == owner.lower() and (a.get("name") or "").lower() == repo.lower()
+    return str(a.get("ownerName") or "").lower() == owner.lower() and str(a.get("name") or "").lower() == repo.lower()
 
 
 @dataclass
@@ -430,7 +431,7 @@ class RepoContext:
         variables: GraphQLVariables | None,
         *keys: str,
         context: str = "",
-    ) -> Any:
+    ) -> JsonValue:
         """Like ``execute``, then walk ``data`` by ``keys`` (missing → None)."""
         data = self.execute(query, variables, context=context)
         if not keys:

@@ -7,7 +7,7 @@ failedIssues (no symmetric pre-flight on add; remove keeps pre-flight).
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import cast
 
 from zh.api import (
     RepoContext,
@@ -29,9 +29,11 @@ from zh.schemas import (
     MutationResult,
     SprintDetailResult,
     SprintListResult,
+    SprintRow,
+    SubIssueChild,
     SubIssueListResult,
 )
-
+from zh.types import JsonDict
 
 _ISSUE_BY_INFO_QUERY = op("issues", "IssueByInfo")
 
@@ -393,7 +395,7 @@ def _normalize_reorder_position(position: str, sibling_number: int | None) -> st
 
 
 def _find_sibling_id_by_number_in_repo(
-    siblings: list[dict[str, Any]],
+    siblings: list[SubIssueChild],
     num: int,
     owner_repo: str,
 ) -> str | None:
@@ -412,7 +414,7 @@ def _find_sibling_id_by_number_in_repo(
 def _resolve_top_bottom_reorder_anchor(
     *,
     pos: str,
-    siblings: list[dict[str, Any]],
+    siblings: list[SubIssueChild],
     child_id: str,
     child_number: int,
     parent_number: int,
@@ -464,7 +466,7 @@ def _resolve_relative_reorder_anchor(
     *,
     pos: str,
     ctx: RepoContext,
-    siblings: list[dict[str, Any]],
+    siblings: list[SubIssueChild],
     sibling_number: int | None,
     child_number: int,
     parent_number: int,
@@ -494,7 +496,7 @@ def _resolve_reorder_anchors(
     *,
     ctx: RepoContext,
     pos: str,
-    siblings: list[dict[str, Any]],
+    siblings: list[SubIssueChild],
     child_id: str,
     child_number: int,
     parent_number: int,
@@ -582,7 +584,7 @@ def _load_reorder_siblings(
     parent_number: int,
     child_number: int,
     pos: str,
-) -> tuple[MutationResult | None, list[dict[str, Any]]]:
+) -> tuple[MutationResult | None, list[SubIssueChild]]:
     sibling_listing = list_sub_issues(ctx, parent_number)
     if not sibling_listing.get("ok"):
         return (
@@ -811,7 +813,7 @@ _SPRINT_ISSUES_PAGE_QUERY = op("sprints", "SprintIssuesPage")
 
 def _resolve_active_sprint_id(
     active_id: str | None,
-    sprints: list[dict[str, Any]],
+    sprints: list[SprintRow],
 ) -> tuple[str | None, str | None, str | None]:
     if not active_id:
         return None, None, "No active sprint in this workspace"
@@ -823,7 +825,7 @@ def _resolve_active_sprint_id(
 
 def _resolve_sprint_by_name(
     want_lc: str,
-    sprints: list[dict[str, Any]],
+    sprints: list[SprintRow],
     *,
     sprint_name: str,
     listing_pagination_warning: str | None,
@@ -924,7 +926,7 @@ def _sort_issues_by_pipeline_then_id(ctx: RepoContext, issues: list[dict]) -> li
 
 
 def _collect_sprint_issue_page_nodes(
-    conn: dict[str, Any],
+    conn: JsonDict,
     *,
     out: list[dict],
     walked_numbers: set[int],
@@ -1066,7 +1068,7 @@ def _resolve_issue_ids_in_repo(ctx: RepoContext, issue_numbers: list[int]) -> tu
 
 
 def _succeeded_numbers_from_add_sprint_links(
-    returned_links: list[Any],
+    returned_links: list[object],
     *,
     sprint_id: str,
     owner_repo: str,
@@ -1123,7 +1125,7 @@ def _still_attached_from_walked_issues(
 
 def _missing_target_sprint_anomaly(
     sprint_id: str,
-    sprints_after: list[Any],
+    sprints_after: list[object],
 ) -> str:
     if not sprints_after:
         return "Mutation response had an empty `sprints` array; walked sprint directly to determine post-state."
@@ -1166,8 +1168,8 @@ def _resolve_removal_post_state(
     ctx: RepoContext,
     *,
     sprint_id: str,
-    target_sprint: dict[str, Any] | None,
-    sprints_after: list[Any],
+    target_sprint: JsonDict | None,
+    sprints_after: list[object],
 ) -> tuple[set[int], set[int], bool, str | None, str | None]:
     still_attached_numbers: set[int] = set()
     walked_numbers: set[int] = set()

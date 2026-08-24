@@ -14,7 +14,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import BinaryIO
 
 try:
     import numpy as np
@@ -35,7 +35,7 @@ MAX_BODY_CHARS = 1500
 
 @dataclass
 class _ModelCache:
-    model: Any = None
+    model: object = None
 
 
 _model_cache = _ModelCache()
@@ -109,7 +109,7 @@ def _empty_cache() -> dict:
     return {"version": CACHE_VERSION, "indexed_at": None, "entries": {}}
 
 
-def _read_pickle_cache(handle: Any) -> dict:
+def _read_pickle_cache(handle: BinaryIO) -> dict:
     return pickle.load(handle)  # noqa: S301
 
 

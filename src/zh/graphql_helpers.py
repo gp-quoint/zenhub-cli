@@ -3,9 +3,19 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, TypedDict
+from typing import TypedDict, cast
 
-from zh.schemas import MutationResult
+from zh.json_helpers import as_dict, dict_nodes, json_int
+from zh.schemas import (
+    CrossRepoChild,
+    FailedIssueRef,
+    MutationResult,
+    Outcome,
+    SprintIssueRow,
+    SubIssueChild,
+    WrongParentChild,
+)
+from zh.types import JsonDict
 
 
 class PageInfo(TypedDict, total=False):
@@ -46,15 +56,20 @@ def paginate_pages[T](
     return items, cap_msg
 
 
-def serialize_failed_issues(failed_issues: list[Any]) -> list[dict[str, Any]]:
-    return [
-        {
-            "number": (fi.get("number") if isinstance(fi, dict) else None),
-            "owner": ((fi.get("repository") or {}).get("ownerName") or "" if isinstance(fi, dict) else ""),
-            "name": ((fi.get("repository") or {}).get("name") or "" if isinstance(fi, dict) else ""),
-        }
-        for fi in failed_issues
-    ]
+def serialize_failed_issues(failed_issues: list[object]) -> list[FailedIssueRef]:
+    out: list[FailedIssueRef] = []
+    for fi in failed_issues:
+        node = as_dict(fi)
+        repo = as_dict(node.get("repository"))
+        number = node.get("number")
+        out.append(
+            {
+                "number": number if isinstance(number, int) and not isinstance(number, bool) else None,
+                "owner": str(repo.get("ownerName") or ""),
+                "name": str(repo.get("name") or ""),
+            }
+        )
+    return out
 
 
 def _divergence_warning(
@@ -107,18 +122,18 @@ def finalize_child_mutation_payload(
     *,
     child_numbers: list[int],
     parent_number: int,
-    payload: dict[str, Any],
-    classify_outcome: Any,
+    payload: JsonDict,
+    classify_outcome: Callable[[int, int], Outcome],
 ) -> MutationResult:
-    success_count = int(payload.get("successCount") or 0)
-    failed_issues = payload.get("failedIssues") or []
+    success_count = json_int(payload.get("successCount"))
+    failed_raw = payload.get("failedIssues")
+    failed_issues: list[object] = cast(list[object], failed_raw) if isinstance(failed_raw, list) else []
     failed_count = len(failed_issues)
-    github_errors = payload.get("githubErrors") or None
-    if isinstance(github_errors, dict) and not github_errors:
-        github_errors = None
+    github_raw = payload.get("githubErrors")
+    github_errors = cast(JsonDict, github_raw) if isinstance(github_raw, dict) and github_raw else None
 
     failed_serialized = serialize_failed_issues(failed_issues)
-    failed_numbers = {fi["number"] for fi in failed_serialized if isinstance(fi.get("number"), int) and not isinstance(fi.get("number"), bool)}
+    failed_numbers = {n for fi in failed_serialized if (n := fi.get("number")) is not None}
     failed_unknown_count = failed_count - len(failed_numbers)
     inferred_succeeded = [n for n in child_numbers if n not in failed_numbers]
     divergence = success_count != len(inferred_succeeded)
@@ -142,81 +157,97 @@ def finalize_child_mutation_payload(
         partial_success_warning=None,
     )
 
-    return {
-        "ok": outcome == "ok",
-        "parent_number": parent_number,
-        "outcome": outcome,
-        "success_count": success_count,
-        "failed_count": failed_count,
-        "succeeded": succeeded,
-        "failed": failed_serialized,
-        "unaccounted": unaccounted,
-        "failed_unknown_count": failed_unknown_count,
-        "github_errors": github_errors,
-        "partial_success_warning": partial_success_warning,
-        "error": None,
-    }
+    return cast(
+        MutationResult,
+        {
+            "ok": outcome == "ok",
+            "parent_number": parent_number,
+            "outcome": outcome,
+            "success_count": success_count,
+            "failed_count": failed_count,
+            "succeeded": succeeded,
+            "failed": failed_serialized,
+            "unaccounted": unaccounted,
+            "failed_unknown_count": failed_unknown_count,
+            "github_errors": github_errors,
+            "partial_success_warning": partial_success_warning,
+            "error": None,
+        },
+    )
 
 
-def parse_subissue_child_node(node: dict[str, Any]) -> dict[str, Any]:
-    assignees = [a.get("login") for a in ((node.get("assignees") or {}).get("nodes") or []) if a.get("login")]
-    pipeline_name = None
+def parse_subissue_child_node(node: JsonDict) -> SubIssueChild:
+    assignees = [
+        str(a["login"])
+        for a in dict_nodes(as_dict(node.get("assignees")).get("nodes"))
+        if a.get("login")
+    ]
+    pipeline_name: str | None = None
     pipeline_workspace_scoped = False
-    pi = node.get("pipelineIssue") or None
+    pi = as_dict(node.get("pipelineIssue"))
     if pi:
-        pl = pi.get("pipeline") or {}
-        pipeline_name = pl.get("name") or None
-        if pipeline_name:
+        pl = as_dict(pi.get("pipeline"))
+        name = pl.get("name")
+        if name:
+            pipeline_name = str(name)
             pipeline_workspace_scoped = True
     if not pipeline_name:
-        fallback_nodes = (node.get("pipelineIssues") or {}).get("nodes") or []
-        if fallback_nodes:
-            fp = (fallback_nodes[0] or {}).get("pipeline") or {}
-            pipeline_name = fp.get("name") or None
+        fallback = dict_nodes(as_dict(node.get("pipelineIssues")).get("nodes"))
+        if fallback:
+            name = as_dict(fallback[0].get("pipeline")).get("name")
+            if name:
+                pipeline_name = str(name)
 
-    repo = node.get("repository") or {}
+    repo = as_dict(node.get("repository"))
+    number = node.get("number")
+    issue_id = node.get("id")
     return {
-        "id": node.get("id"),
-        "number": node.get("number"),
-        "title": node.get("title") or "",
-        "state": node.get("state") or "UNKNOWN",
+        "id": str(issue_id) if issue_id is not None else "",
+        "number": number if isinstance(number, int) and not isinstance(number, bool) else 0,
+        "title": str(node.get("title") or ""),
+        "state": str(node.get("state") or "UNKNOWN"),
         "pipeline": pipeline_name,
         "pipeline_workspace_scoped": pipeline_workspace_scoped,
         "assignees": assignees,
         "repository": {
-            "owner": repo.get("ownerName") or "",
-            "name": repo.get("name") or "",
+            "owner": str(repo.get("ownerName") or ""),
+            "name": str(repo.get("name") or ""),
         },
     }
 
 
-
-def parse_sprint_issue_node(issue: dict[str, Any]) -> dict[str, Any]:
-    assignees = [a.get("login") for a in ((issue.get("assignees") or {}).get("nodes") or []) if a.get("login")]
-    pipeline_name = None
-    scoped = issue.get("pipelineIssue") or {}
-    if isinstance(scoped, dict):
-        pl = scoped.get("pipeline") or {}
-        pipeline_name = pl.get("name") or None
+def parse_sprint_issue_node(issue: JsonDict) -> SprintIssueRow:
+    assignees = [
+        str(a["login"])
+        for a in dict_nodes(as_dict(issue.get("assignees")).get("nodes"))
+        if a.get("login")
+    ]
+    pipeline_name: str | None = None
+    scoped = as_dict(issue.get("pipelineIssue"))
+    if scoped:
+        name = as_dict(scoped.get("pipeline")).get("name")
+        if name:
+            pipeline_name = str(name)
     if not pipeline_name:
-        pipeline_nodes = ((issue.get("pipelineIssues") or {}).get("nodes")) or []
+        pipeline_nodes = dict_nodes(as_dict(issue.get("pipelineIssues")).get("nodes"))
         if pipeline_nodes:
-            first_pn = pipeline_nodes[0] or {}
-            pl = first_pn.get("pipeline") or {}
-            pipeline_name = pl.get("name") or None
-    rep = issue.get("repository") or {}
-    est = issue.get("estimate") or {}
+            name = as_dict(pipeline_nodes[0].get("pipeline")).get("name")
+            if name:
+                pipeline_name = str(name)
+    rep = as_dict(issue.get("repository"))
+    est = as_dict(issue.get("estimate")).get("value")
+    number = issue.get("number")
     return {
-        "number": issue.get("number"),
-        "title": issue.get("title") or "",
-        "state": issue.get("state") or "UNKNOWN",
-        "html_url": issue.get("htmlUrl") or "",
-        "estimate": est.get("value"),
+        "number": number if isinstance(number, int) and not isinstance(number, bool) else 0,
+        "title": str(issue.get("title") or ""),
+        "state": str(issue.get("state") or "UNKNOWN"),
+        "html_url": str(issue.get("htmlUrl") or ""),
+        "estimate": float(est) if isinstance(est, (int, float)) and not isinstance(est, bool) else None,
         "assignees": assignees,
         "pipeline": pipeline_name,
         "repository": {
-            "owner": rep.get("ownerName") or "",
-            "name": rep.get("name") or "",
+            "owner": str(rep.get("ownerName") or ""),
+            "name": str(rep.get("name") or ""),
         },
     }
 
@@ -224,8 +255,8 @@ def parse_sprint_issue_node(issue: dict[str, Any]) -> dict[str, Any]:
 def remove_subissue_preflight_messages(
     *,
     not_found: list[int],
-    cross_repo: list[dict[str, Any]],
-    wrong_parent: list[dict[str, Any]],
+    cross_repo: list[CrossRepoChild],
+    wrong_parent: list[WrongParentChild],
 ) -> str:
     msgs: list[str] = []
     if not_found:
@@ -235,7 +266,10 @@ def remove_subissue_preflight_messages(
     if wrong_parent:
         msgs.append(
             "wrong parent: "
-            + ", ".join(f"#{w['number']} (actual parent: {'#' + str(w['actual_parent']) if w['actual_parent'] else 'none'})" for w in wrong_parent)
+            + ", ".join(
+                f"#{w['number']} (actual parent: {'#' + str(w['actual_parent']) if w.get('actual_parent') else 'none'})"
+                for w in wrong_parent
+            )
         )
     return "Pre-flight validation failed: " + "; ".join(msgs)
 
@@ -245,10 +279,15 @@ def remove_subissue_preflight_failure_payload(
     parent_number: int,
     child_numbers: list[int],
     not_found: list[int],
-    cross_repo: list[dict[str, Any]],
-    wrong_parent: list[dict[str, Any]],
+    cross_repo: list[CrossRepoChild],
+    wrong_parent: list[WrongParentChild],
 ) -> MutationResult:
     mismatch_numbers = set(not_found) | {c["number"] for c in cross_repo} | {w["number"] for w in wrong_parent}
+    failed: list[FailedIssueRef | int] = [
+        *[{"number": n, "owner": "", "name": ""} for n in not_found],
+        *[{"number": c["number"], "owner": c["owner"], "name": c["name"]} for c in cross_repo],
+        *[{"number": w["number"], "owner": "", "name": ""} for w in wrong_parent],
+    ]
     return {
         "ok": False,
         "parent_number": parent_number,
@@ -256,11 +295,7 @@ def remove_subissue_preflight_failure_payload(
         "success_count": 0,
         "failed_count": (len(not_found) + len(wrong_parent) + len(cross_repo)),
         "succeeded": [],
-        "failed": [
-            *[{"number": n, "owner": "", "name": ""} for n in not_found],
-            *cross_repo,
-            *[{"number": w["number"], "owner": "", "name": ""} for w in wrong_parent],
-        ],
+        "failed": failed,
         "unaccounted": [n for n in child_numbers if n not in mismatch_numbers],
         "failed_unknown_count": 0,
         "github_errors": None,

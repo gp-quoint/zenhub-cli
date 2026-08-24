@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Any, cast
+from typing import cast
 
 from zh.api import RepoContext, ZhApiError, get_gh_repo_id
-from zh.json_helpers import as_dict, data_get, dict_nodes
+from zh.json_helpers import as_dict, data_get, dict_nodes, json_int, json_str_or_none
 from zh.operations import op
 from zh.schemas import (
     BoardOverview,
@@ -17,6 +17,7 @@ from zh.schemas import (
     PipelineNode,
     PriorityRow,
 )
+from zh.types import JsonDict
 
 _PIPELINES_QUERY = op("workspace", "PipelinesOpen")
 
@@ -38,7 +39,7 @@ def _cached_pipeline_nodes(workspace_id: str, token: str) -> tuple[tuple[str | N
     if not ws:
         raise ZhApiError("Workspace not found")
     nodes = dict_nodes(as_dict(as_dict(ws).get("pipelinesConnection")).get("nodes"))
-    return tuple((node.get("id"), node.get("name")) for node in nodes)
+    return tuple((json_str_or_none(node.get("id")), json_str_or_none(node.get("name"))) for node in nodes)
 
 
 def list_pipelines(ctx: RepoContext) -> list[PipelineNode]:
@@ -106,10 +107,10 @@ def board_overview(ctx: RepoContext, *, include_closed: bool = False) -> BoardOv
         raise ZhApiError("Workspace not found")
     ws_dict = as_dict(ws)
     pipelines = dict_nodes(as_dict(ws_dict.get("pipelinesConnection")).get("nodes"))
-    counts = {str(p.get("name") or "?"): int(as_dict(p.get("issues")).get("totalCount") or 0) for p in pipelines}
+    counts = {str(p.get("name") or "?"): json_int(as_dict(p.get("issues")).get("totalCount")) for p in pipelines}
     total = sum(counts.values())
     return {
-        "workspace": ws_dict.get("name"),
+        "workspace": json_str_or_none(ws_dict.get("name")),
         "pipelines": counts,
         "total": total,
         "include_closed": include_closed,
@@ -192,7 +193,7 @@ def pipeline_issues(
     pipeline_id: str | None = None,
 ) -> PipelineIssuesResult:
     resolved_pipeline_id = pipeline_id or find_pipeline_id(ctx, pipeline_name)
-    filters: dict[str, Any] = {}
+    filters: JsonDict = {}
     if assignee:
         filters["assignees"] = {"in": [assignee.lstrip("@")]}
     data = ctx.execute(

@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import re
-from typing import Any
 
-from zh.api import JsonDict, RepoContext, ZhApiError
+from zh.api import RepoContext, ZhApiError
 from zh.gh_ops import github_issue_url, zenhub_issue_url
 from zh.graphql_ops import add_sub_issues, get_issue_by_info
-from zh.json_helpers import as_dict, as_list, data_get, dict_nodes
+from zh.json_helpers import as_dict, as_list, data_get, dict_nodes, json_int
 from zh.operations import op
 from zh.schemas import (
     AssignResult,
@@ -17,7 +16,7 @@ from zh.schemas import (
     ReorderResult,
     UpdateIssueResult,
 )
-from zh.types import reorder_position
+from zh.types import JsonDict, reorder_position
 from zh.workspace_ops import find_pipeline_id, resolve_issue_type_id, resolve_priority_id
 
 _POSITIVE_INT = re.compile(r"^[0-9]+$")
@@ -118,11 +117,11 @@ def _build_create_input(
     parent_number: int | None,
     estimate: str | None,
     priority_name: str | None,
-) -> dict[str, Any]:
+) -> JsonDict:
     if not title.strip():
         raise ZhApiError("title must be non-empty")
     _validate_create_options(ctx, parent_number=parent_number, estimate=estimate, priority_name=priority_name)
-    inp: dict[str, Any] = {"repositoryId": ctx.repo_id, "title": title}
+    inp: JsonDict = {"repositoryId": ctx.repo_id, "title": title}
     if body:
         inp["body"] = body
     if labels:
@@ -134,7 +133,7 @@ def _build_create_input(
     return inp
 
 
-def _create_issue_record(ctx: RepoContext, inp: dict[str, Any]) -> JsonDict:
+def _create_issue_record(ctx: RepoContext, inp: JsonDict) -> JsonDict:
     # Do not select issueType: ZenHub exposes it as a union; nested selections fail.
     data = ctx.execute(_CREATE_ISSUE, {"input": inp}, context="createIssue")
     issue = as_dict(data_get(data, "createIssue", "issue"))
@@ -155,6 +154,8 @@ def _apply_create_followups(
     parent_number: int | None,
 ) -> CreateIssueResult:
     number = issue["number"]
+    if not isinstance(number, int) or isinstance(number, bool):
+        raise ZhApiError("createIssue returned no issue number")
     issue_id = issue.get("id")
     parent_wired: int | None = None
     if parent_number is not None and isinstance(issue_id, str):
@@ -169,7 +170,8 @@ def _apply_create_followups(
     estimate_applied = set_estimate(ctx, number, estimate) if estimate else None
     priority_set = set_priority(ctx, number, priority_name) if priority_name else None
 
-    gh_url = issue.get("htmlUrl") or github_issue_url(ctx.owner_repo, number)
+    gh_url_raw = issue.get("htmlUrl") or github_issue_url(ctx.owner_repo, number)
+    gh_url = str(gh_url_raw) if gh_url_raw else None
     zh_url = zenhub_issue_url(ctx.workspace_id, ctx.owner_repo, number)
 
     return {
@@ -244,7 +246,13 @@ def set_estimate(ctx: RepoContext, issue_number: int, points: str) -> float | No
         context="setEstimate",
     )
     applied = as_dict(as_dict(data_get(data, "setEstimate", "issue")).get("estimate")).get("value")
-    return float(applied) if applied is not None else None
+    if applied is None:
+        return None
+    if isinstance(applied, bool):
+        return None
+    if isinstance(applied, (int, float)):
+        return float(applied)
+    return None
 
 
 def set_priority(ctx: RepoContext, issue_number: int, level: str) -> str | None:
@@ -308,7 +316,7 @@ def _issue_pipeline_info(ctx: RepoContext, issue_number: int) -> tuple[str, str,
     total = as_dict(pipeline_node.get("issues")).get("totalCount") or 0
     if not isinstance(pipeline_id, str):
         raise ZhApiError(f"Issue #{issue_number} has no pipeline id")
-    return issue_id, str(node.get("title") or issue.get("title") or ""), pipeline_id, int(total)
+    return issue_id, str(node.get("title") or issue.get("title") or ""), pipeline_id, json_int(total)
 
 
 def _parse_reorder_position(raw: str, total_count: int) -> int:
@@ -449,7 +457,7 @@ def update_issue(
     issue_id = issue.get("id")
     if not isinstance(issue_id, str):
         raise ZhApiError(f"Issue #{issue_number} has no id")
-    inp: dict[str, Any] = {"issueId": issue_id}
+    inp: JsonDict = {"issueId": issue_id}
     if title is not None:
         inp["title"] = title
     if body is not None:

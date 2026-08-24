@@ -7,7 +7,7 @@ from typing import cast
 from zh.api import RepoContext, ZhApiError
 from zh.cli.output import warn
 from zh.graphql_ops import get_issue_by_info, list_sub_issues
-from zh.json_helpers import as_dict, dict_nodes
+from zh.json_helpers import as_dict, dict_nodes, json_int, json_str_or_none
 from zh.operations import op
 from zh.schemas import PlanningChildRow, PlanningListItem, PlanningListResult, PlanningShowResult
 from zh.workspace_ops import fetch_issue_types, resolve_issue_type_id
@@ -61,8 +61,8 @@ def list_issues_by_type(ctx: RepoContext, type_name: str) -> PlanningListResult:
     ]
     return {
         "type": canonical,
-        "workspace": ws.get("name"),
-        "total_count": int(issues_conn.get("totalCount") or 0),
+        "workspace": json_str_or_none(ws.get("name")),
+        "total_count": json_int(issues_conn.get("totalCount")),
         "fetched_count": len(nodes),
         "items": cast(list[PlanningListItem], items),
     }
@@ -97,8 +97,8 @@ def hierarchy_children_detail(ctx: RepoContext, parent_number: int) -> PlanningS
         )
     return {
         "parent_number": parent_number,
-        "issue_type": as_dict(node_dict.get("issueType")).get("name"),
-        "total_count": int(children_conn.get("totalCount") or 0),
+        "issue_type": json_str_or_none(as_dict(node_dict.get("issueType")).get("name")),
+        "total_count": json_int(children_conn.get("totalCount")),
         "fetched_count": len(children),
         "children": children,
     }

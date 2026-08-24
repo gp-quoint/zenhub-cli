@@ -8,13 +8,12 @@ import os
 import re
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import cast
 
-from diskcache import Cache
+from diskcache import Cache  # type: ignore[import-untyped]
 
 from zh.errors import ZhApiError
-
-type JsonDict = dict[str, Any]
+from zh.types import GraphQLVariables, JsonDict
 
 _MUTATION_RE = re.compile(r"^\s*mutation\b", re.I)
 _PROCESS_READ_CACHE: dict[str, JsonDict] = {}
@@ -88,9 +87,9 @@ def close_disk_cache() -> None:
 
 
 def _current_gen(cache: Cache) -> int:
-    value = cache.get(_GEN_KEY, default=0)
+    value = cast(object, cache.get(_GEN_KEY, default=0))  # type: ignore[reportUnknownMemberType]
     try:
-        return int(value or 0)
+        return int(value or 0)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return 0
 
@@ -101,11 +100,11 @@ def bump_graphql_cache_gen() -> int:
         return 0
     cache = _open_disk_cache()
     nxt = _current_gen(cache) + 1
-    cache.set(_GEN_KEY, nxt)
+    cache.set(_GEN_KEY, nxt)  # type: ignore[reportUnknownMemberType]
     return nxt
 
 
-def _make_cache_key(query: str, variables: dict[str, Any] | None, token: str, gen: int) -> str:
+def _make_cache_key(query: str, variables: GraphQLVariables | None, token: str, gen: int) -> str:
     payload = json.dumps(
         {"q": query, "v": variables or {}, "t": _token_fingerprint(token), "g": gen},
         sort_keys=True,
@@ -116,7 +115,7 @@ def _make_cache_key(query: str, variables: dict[str, Any] | None, token: str, ge
 
 def cached_graphql_read(
     query: str,
-    variables: dict[str, Any] | None,
+    variables: GraphQLVariables | None,
     *,
     token: str,
     timeout: float,
@@ -138,10 +137,11 @@ def cached_graphql_read(
         return cached
 
     if disk is not None:
-        hit = disk.get(key, default=None)
+        hit = cast(object, disk.get(key, default=None))  # type: ignore[reportUnknownMemberType]
         if isinstance(hit, dict):
-            _PROCESS_READ_CACHE[key] = hit
-            return hit
+            cached_hit = cast(JsonDict, hit)
+            _PROCESS_READ_CACHE[key] = cached_hit
+            return cached_hit
 
     result = direct_request(query, variables, token=token, timeout=timeout, url=url)
     _PROCESS_READ_CACHE[key] = result
@@ -149,7 +149,7 @@ def cached_graphql_read(
     if disk_cache_enabled() and not force:
         if disk is None:
             disk = _open_disk_cache()
-        disk.set(key, result, expire=parse_ttl_seconds())
+        disk.set(key, result, expire=parse_ttl_seconds())  # type: ignore[reportUnknownMemberType]
 
     return result
 

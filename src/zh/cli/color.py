@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import Any, Literal, TextIO
+from typing import Literal, TextIO
 
 from rich.console import Console
 
@@ -48,7 +48,7 @@ def reset_consoles() -> None:
     _stderr_console = None
 
 
-def color_enabled(stream: Any = sys.stdout) -> bool:
+def color_enabled(stream: TextIO = sys.stdout) -> bool:
     """Return whether styling should be emitted on ``stream``."""
     if no_color_set():
         return False
@@ -81,7 +81,7 @@ def stderr_console() -> Console:
     return _stderr_console
 
 
-def paint(text: str, style: str, *, stream: Any = sys.stdout) -> str:
+def paint(text: str, style: str, *, stream: TextIO = sys.stdout) -> str:
     if not color_enabled(stream):
         return text
     return f"[{style}]{text}[/]"

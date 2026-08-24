@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Mapping
+from typing import cast
 
 import httpx
 
 from zh.errors import ZhApiError
+from zh.types import JsonValue
 
 
 def assert_https_url(url: str) -> None:
@@ -20,9 +22,9 @@ def request_json(
     url: str,
     *,
     headers: dict[str, str],
-    json_body: dict[str, Any] | None = None,
+    json_body: Mapping[str, object] | None = None,
     timeout: float,
-) -> Any:
+) -> JsonValue:
     """Perform an HTTPS request and return parsed JSON (dict/list).
 
     Raises ZhApiError on non-HTTPS URLs, transport failures, HTTP errors,
@@ -42,7 +44,7 @@ def request_json(
         raise ZhApiError(f"HTTP {resp.status_code} from {url}: {body or resp.reason_phrase}")
 
     try:
-        return resp.json()
+        return cast(JsonValue, resp.json())
     except ValueError as exc:
         raise ZhApiError(f"Non-JSON response from {url}: {body[:200]!r}") from exc
 
@@ -52,7 +54,7 @@ def request_text(
     url: str,
     *,
     headers: dict[str, str],
-    json_body: dict[str, Any] | None = None,
+    json_body: Mapping[str, object] | None = None,
     timeout: float,
 ) -> tuple[int, str]:
     """Perform an HTTPS request and return ``(status_code, body_text)``.

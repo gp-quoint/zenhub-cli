@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import Any, NoReturn
+from typing import NoReturn
 
 from zh.cli.color import color_enabled, stderr_console, stdout_console
 from zh.log import configure_cli_logging, normalize_log_message
+from zh.schemas import CreateIssueResult
 
 configure_cli_logging()
 
@@ -49,7 +50,7 @@ def success(message: str) -> None:
         console.print(f"✓ {message}")
 
 
-def emit_create_links(created: dict[str, Any]) -> None:
+def emit_create_links(created: CreateIssueResult) -> None:
     """Print ZenHub and GitHub URLs after a successful create (stdout)."""
     zenhub = created.get("zenhub_url")
     github = created.get("github_url") or created.get("url")
@@ -59,7 +60,7 @@ def emit_create_links(created: dict[str, Any]) -> None:
         print_line(f"  GitHub: {github}")
 
 
-def emit_json(data: Any) -> None:
+def emit_json(data: object) -> None:
     json.dump(data, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
     sys.stdout.flush()
