@@ -43,24 +43,63 @@ def parse_issue_number(raw: str) -> int:
     return int(stripped)
 
 
+def _scoped_pipeline_node(node: JsonDict) -> JsonDict:
+    """Workspace-scoped pipelineIssue payload (pipeline + optional priority)."""
+    return as_dict(node.get("pipelineIssue"))
+
+
+def _pipeline_name_from_scoped(node: JsonDict) -> str | None:
+    name = as_dict(_scoped_pipeline_node(node).get("pipeline")).get("name")
+    return str(name) if name else None
+
+
+def _fetch_issue_pipeline_node(ctx: RepoContext, issue_number: int) -> JsonDict:
+    return as_dict(
+        ctx.execute_path(
+            _ISSUE_PIPELINE_QUERY,
+            {
+                "repoId": ctx.repo_id,
+                "issueNumber": issue_number,
+                "workspaceId": ctx.workspace_id,
+            },
+            "issueByInfo",
+            context="issue pipeline lookup",
+        ),
+    )
+
+
 def _pipeline_name_before_move(ctx: RepoContext, issue_number: int) -> str:
     """Best-effort current pipeline name for move reporting (never blocks the move)."""
     try:
-        node = as_dict(
-            ctx.execute_path(
-                _ISSUE_PIPELINE_QUERY,
-                {"repoId": ctx.repo_id, "issueNumber": issue_number},
-                "issueByInfo",
-                context="issue pipeline lookup",
-            ),
-        )
-        pipes = as_list(as_dict(node.get("pipelineIssues")).get("nodes"))
-        if not pipes:
-            return "(none)"
-        name = as_dict(as_dict(pipes[0]).get("pipeline")).get("name")
-        return str(name) if name else "(none)"
+        name = _pipeline_name_from_scoped(_fetch_issue_pipeline_node(ctx, issue_number))
+        return name or "(none)"
     except ZhApiError:
         return "Unknown"
+
+
+def issue_zenhub_summary(ctx: RepoContext, issue_number: int) -> JsonDict:
+    """Workspace-scoped board fields for ``zh issue`` (pipeline, estimate, priority, URL)."""
+    try:
+        node = _fetch_issue_pipeline_node(ctx, issue_number)
+    except ZhApiError:
+        return {
+            "pipeline": None,
+            "estimate": None,
+            "priority": None,
+            "zenhub_url": zenhub_issue_url(ctx.workspace_id, ctx.owner_repo, issue_number),
+            "workspace_id": ctx.workspace_id,
+        }
+    scoped = _scoped_pipeline_node(node)
+    est = as_dict(node.get("estimate")).get("value")
+    priority = as_dict(scoped.get("priority")).get("name")
+    zh_url = node.get("zenhubUrl") or zenhub_issue_url(ctx.workspace_id, ctx.owner_repo, issue_number)
+    return {
+        "pipeline": _pipeline_name_from_scoped(node),
+        "estimate": float(est) if isinstance(est, (int, float)) and not isinstance(est, bool) else None,
+        "priority": str(priority) if priority else None,
+        "zenhub_url": str(zh_url) if zh_url else None,
+        "workspace_id": ctx.workspace_id,
+    }
 
 
 def move_issue(ctx: RepoContext, issue_number: int, pipeline_name: str) -> MoveResult:
@@ -74,13 +113,14 @@ def move_issue(ctx: RepoContext, issue_number: int, pipeline_name: str) -> MoveR
     from_pipeline = _pipeline_name_before_move(ctx, issue_number)
     data = ctx.execute(
         _MOVE_MUTATION,
-        {"input": {"issueId": issue_id, "pipelineId": pipeline_id, "position": 0}},
+        {
+            "input": {"issueId": issue_id, "pipelineId": pipeline_id, "position": 0},
+            "workspaceId": ctx.workspace_id,
+        },
         context="moveIssue",
     )
     issue_node = as_dict(data_get(data, "moveIssue", "issue"))
-    pipe_nodes = as_list(as_dict(issue_node.get("pipelineIssues")).get("nodes"))
-    first_pipe = as_dict(pipe_nodes[0] if pipe_nodes else None)
-    new_name = as_dict(first_pipe.get("pipeline")).get("name")
+    new_name = _pipeline_name_from_scoped(issue_node)
     if not new_name:
         raise ZhApiError("Failed to move issue")
     return {
@@ -299,23 +339,12 @@ def _issue_pipeline_info(ctx: RepoContext, issue_number: int) -> tuple[str, str,
     issue_id = issue.get("id")
     if not isinstance(issue_id, str):
         raise ZhApiError(f"Issue #{issue_number} has no id")
-    node = as_dict(
-        ctx.execute_path(
-            _ISSUE_PIPELINE_QUERY,
-            {"repoId": ctx.repo_id, "issueNumber": issue_number},
-            "issueByInfo",
-            context="issue pipeline lookup",
-        ),
-    )
-    pipes = as_list(as_dict(node.get("pipelineIssues")).get("nodes"))
-    if not pipes:
-        raise ZhApiError(f"Issue #{issue_number} is not in any pipeline")
-    pipe = as_dict(pipes[0])
-    pipeline_node = as_dict(pipe.get("pipeline"))
+    node = _fetch_issue_pipeline_node(ctx, issue_number)
+    pipeline_node = as_dict(_scoped_pipeline_node(node).get("pipeline"))
     pipeline_id = pipeline_node.get("id")
     total = as_dict(pipeline_node.get("issues")).get("totalCount") or 0
     if not isinstance(pipeline_id, str):
-        raise ZhApiError(f"Issue #{issue_number} has no pipeline id")
+        raise ZhApiError(f"Issue #{issue_number} is not in any pipeline for this workspace")
     return issue_id, str(node.get("title") or issue.get("title") or ""), pipeline_id, json_int(total)
 
 
@@ -331,7 +360,10 @@ def reorder_issue(ctx: RepoContext, issue_number: int, position: str) -> Reorder
     pos_int = _parse_reorder_position(position, total)
     ctx.execute(
         _MOVE_MUTATION,
-        {"input": {"issueId": issue_id, "pipelineId": pipeline_id, "position": pos_int}},
+        {
+            "input": {"issueId": issue_id, "pipelineId": pipeline_id, "position": pos_int},
+            "workspaceId": ctx.workspace_id,
+        },
         context="reorderIssue",
     )
     return {"number": issue_number, "title": title, "position": pos_int}

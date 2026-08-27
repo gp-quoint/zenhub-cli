@@ -86,7 +86,7 @@ Precedence: **flag > env / config > git-remote + first-workspace fallback**. Use
 | `zh board [--all] [--json]` | Per-pipeline issue counts (`--all` includes closed) |
 | `zh pipelines [--json]` | Pipeline names (plain one-per-line output) |
 | `zh pipeline "<name>" [--json]` | Issues in a pipeline (top = highest priority) |
-| `zh issue <N> [--json]` | Full detail: body, comments, pipeline, priority, estimate, assignees, parent/sub-issue counts, ZH + GH URLs |
+| `zh issue <N> [--json]` | Full detail: GH body/comments **plus** workspace-scoped `pipeline`, `estimate`, `priority`, `zenhub_url`, `workspace_id`, parent/sub-issue counts |
 | `zh mine [user] [--no-urls] [--json]` | Issues assigned to current or specified user |
 | `zh users [--json]` | Assignable users (via `gh` collaborators; plain one-per-line output) |
 | `zh workspaces [--json]` | Workspaces for the repo (● = active target) |
@@ -119,7 +119,7 @@ Precedence: **flag > env / config > git-remote + first-workspace fallback**. Use
 | `zh close <N> [comment] [-r completed\|not planned\|duplicate]` | Close issue |
 | `zh reopen <N>` | Reopen closed issue |
 | `zh delete <N> [-y]` | **DANGER** — permanent GitHub delete. `-y` skips interactive confirm. Prefer `zh close`. |
-| `zh move <N> "<pipeline>" [--json]` | Move between pipelines. Human line shows real `from → to`. `--json`: `{ok, number, title, from, to}` |
+| `zh move <N> "<pipeline>" [--json]` | Move between pipelines. Human line shows workspace-scoped `from → to`. `--json`: `{ok, number, title, from, to}` (not unscoped `pipelineIssues[0]`) |
 | `zh reorder <N> <position\|top\|bottom>` | Reorder within current pipeline (`top` = 1) |
 | `zh estimate <N> <points\|clear>` | Set/clear story points |
 | `zh assign <N> <user> [user…]` | Assign one or more users |

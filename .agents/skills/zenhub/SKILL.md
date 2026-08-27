@@ -18,14 +18,43 @@ description: >-
 
 Manage ZenHub backlogs with the installed **`zh` CLI** (Python + uv) as a black box. Use shell `zh …` for **all** operations — do **not** use the zenhub MCP server.
 
-Do **not** open, edit, clone, or otherwise depend on `zh`'s internals. If a needed capability is missing from `zh --help`, escalate to the user — do not try to extend the tool from source.
+Do **not** open, edit, clone, or otherwise depend on `zh`'s internals during backlog work. If a needed capability is missing from `zh <cmd> --help`, escalate to the user — do not try to extend the tool from source in a backlog session (CLI maintenance is a separate, explicit task).
+
+## Lean session bootstrap (token hygiene)
+
+Agents waste tokens when every `/zenhub` turn starts with discovery shells. **Do not** ritualistically run:
+
+```bash
+zh version && zh --help | head …
+rg -i zenhub|filing|workspace AGENTS.md README.md docs/ …
+git remote -v; git branch; git log --oneline -5
+zh workspaces; zh pipelines; zh pipeline "…"   # fan-out just to find one ticket
+```
+
+| Situation | Do this | Skip |
+|---|---|---|
+| Ticket id known (`#1044`, branch `1044-…`, `Tracked in owner/repo#N`) | One targeted write/read: `zh -r owner/repo -w "…" move 1044 Blocked --json` or `zh issue 1044 --json` | version/help, repo greps, git log, listing every pipeline |
+| Need "where is this ticket?" | `zh -r … -w … issue N --json` (includes **pipeline**, estimate, priority, ZH+GH URLs) | `zh pipeline` over every column |
+| Need board overview | `zh board` (and maybe one `zh pipeline` / `zh mine`) | full help dump |
+| First write in an unfamiliar project, **no** Engram/AGENTS filing notes | Read project conventions once (Engram → AGENTS/`CLAUDE.md` filing section); ask if missing | repeating that scan every turn |
+| Flag/`--json` fails or user asks "can zh …?" | `zh <that-command> --help` only | `zh --help` whole tree + `zh version` |
+| Suspected missing feature after a real error | `zh version` once, then escalate or use fallback | version check on every turn |
+
+**Default move (+ optional block reason comment):**
+
+1. Resolve `-r` / `-w` from config, Engram, or known project convention (e.g. Collection for `QuoIntelligence/quollection`) — not by probing every workspace every time.
+2. `zh -r … -w … move N "<Pipeline>" --json` → trust workspace-scoped `from` / `to`.
+3. If a reason comment is needed → Hard Rule #6 draft → `zh comment N -f …`.
+4. Only if move JSON looks wrong (unexpected `from`, or `to` ≠ requested) → one `zh issue N --json` to re-check; do not pre-scan pipelines.
+
+`from` / `to` are **workspace-scoped**. Repos on multiple ZenHub workspaces used to report the wrong board when the CLI read unscoped `pipelineIssues[0]` — current `zh` uses `pipelineIssue(workspaceId:)`. Trust `--json`; do not "verify" by listing all pipelines unless something contradicts intent.
 
 ## CLI invocation (Typer)
 
 ```bash
-zh --help                    # command tree
-zh create --help             # per-command flags (NOT `zh help create`)
+zh create --help             # per-command flags when needed (NOT `zh help create`)
 zh -r owner/repo -w "Team" board   # global flags before subcommand
+# zh --help                  # only when exploring an unfamiliar command family
 ```
 
 - **Body input:** prefer `-f <file>` (works after the issue number: `zh comment 42 -f notes.md`). Also `--stdin`; create/edit use `-b`/`-d`; **comment add** and **comment edit** accept `-m` / `-f` / `--stdin`. Bare `zh comment <N>` / `zh edit <N>` / `zh comment edit <N>` opens `$EDITOR` — avoid in non-interactive agent sessions unless intentional.
@@ -34,8 +63,9 @@ zh -r owner/repo -w "Team" board   # global flags before subcommand
 - **Machine output:** `--json` on stdout (human info on stderr) where supported; `-q` emits only the new issue number on create. Prefer `--json` on writes agents must verify (`zh move … --json`, `zh sprint add … --json`). **`zh edit` has no `--json`** — apply with `-f`/`-t`/`-d`, then verify via `zh issue <N> --json`.
 - **Nested subcommands:** `zh sprint add current 42`, `zh comment edit 42 [index]`, `zh epic create "Title"`. Comment add is the default: `zh comment 42 …` ≡ `zh comment add 42 …`. Sprint show defaults similarly: `zh sprint` / `zh sprint current` ≡ `zh sprint show current`.
 - **Sprint membership:** `zh sprint add current 42` and `zh sa current 42` both work. Prefer the explicit form in scripts.
-- **Pipeline moves:** `zh move 42 "In Progress"` or unique prefix/substring (`zh move 42 progress`). `--json` returns `{ok, number, title, from, to}` with the real prior pipeline. Mutations invalidate GraphQL read caches (in-process + on-disk gen), so a follow-up `zh pipeline` / `zh sprint` sees fresh state without `ZH_GRAPHQL_CACHE_FORCE=1`.
+- **Pipeline moves:** `zh move 42 "In Progress"` or unique prefix/substring (`zh move 42 progress`). `--json` returns `{ok, number, title, from, to}` with the **workspace-scoped** prior/new pipeline. Mutations invalidate GraphQL read caches (in-process + on-disk gen), so a follow-up `zh pipeline` / `zh sprint` sees fresh state without `ZH_GRAPHQL_CACHE_FORCE=1`.
 - **`zh c` vs `zh comment`:** `c` is add-only (no `edit` subcommand). Use `zh comment edit …` for edits.
+- **`zh issue <N> [--json]`:** GitHub body/comments **plus** workspace-scoped `pipeline`, `estimate`, `priority`, `zenhub_url`, `workspace_id`. Prefer this over pipeline fan-out when locating one ticket.
 
 ## CLI setup
 
@@ -52,7 +82,7 @@ Install (typical): clone/symlink the checkout, put `zh` on PATH (e.g. `ln -sf ~/
 
 **Similarity search** (`zh similar`, built-in duplicate pre-flight on `zh create` / planning creates) is a core dependency — first `uv sync` / `zh` run pulls in `sentence-transformers` (+ torch). First embedding load also caches the model under `~/.cache/huggingface/` (~80MB).
 
-Verify: `zh version` (agentic move/sprint/cache UX needs **≥ 1.11.0**; `comment edit -f/-m/--fill` needs a checkout/tag that includes that feature, typically **≥ v1.12.0** once tagged on `main`), `zh --help`, `zh similar "login bug" --json`. Version is VCS-derived (`hatch-vcs`); do not expect a static string in `pyproject.toml`.
+**Version:** VCS-derived (`hatch-vcs`); do not expect a static string in `pyproject.toml`. Agents should **not** run `zh version` every turn — see Lean session bootstrap. Human install verify (once): `zh version`, `zh similar "login bug" --json`. Check version only after a real capability miss (`comment edit --fill`, workspace-scoped move/`issue` pipeline fields, etc.).
 
 `zh` has a wide command surface (issue ops, epic ops, sprint ops, board surveys) and each project has its own filing conventions, so recurring tasks (sprint planning, grooming, batch cleanups) benefit from a consistent playbook rather than being re-derived every session.
 

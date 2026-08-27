@@ -32,6 +32,7 @@ from zh.gh_ops import (
 from zh.graphql_ops import get_issue_by_info, list_sub_issues
 from zh.issue_ops import (
     assign_issue,
+    issue_zenhub_summary,
     move_issue,
     parse_issue_number,
     reorder_issue,
@@ -87,21 +88,37 @@ def issue_cmd(
     number: Annotated[str, typer.Argument(help="Issue number")],
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """View issue details via GitHub."""
+    """View issue details via GitHub + workspace-scoped ZenHub board fields."""
     state = get_state(ctx)
     ctx_obj = state.context()
     num = parse_issue_number(number)
     try:
         data = gh_issue_view(ctx_obj.owner_repo, num)
+        zh = issue_zenhub_summary(ctx_obj, num)
         subs = list_sub_issues(ctx_obj, num)
     except ZhApiError as exc:
         error(str(exc))
+    merged = {
+        **data,
+        "pipeline": zh.get("pipeline"),
+        "estimate": zh.get("estimate"),
+        "priority": zh.get("priority"),
+        "zenhub_url": zh.get("zenhub_url"),
+        "workspace_id": zh.get("workspace_id"),
+    }
     if json_output or state.json_output:
-        emit_json({"ok": True, "issue": data, "sub_issues": subs.get("children", [])})
+        emit_json({"ok": True, "issue": merged, "sub_issues": subs.get("children", [])})
         return
     print_line(f"\n#{num}: {data.get('title')}\n")
     print_line(str(data.get("body") or ""))
-    print_line(f"\nState: {data.get('state')}  URL: {data.get('url')}")
+    pipe = zh.get("pipeline") or "-"
+    est = zh.get("estimate")
+    est_s = str(est) if est is not None else "-"
+    prio = zh.get("priority") or "-"
+    print_line(f"\nState: {data.get('state')}  Pipeline: {pipe}  Estimate: {est_s}  Priority: {prio}")
+    print_line(f"GitHub: {data.get('url')}")
+    if zh.get("zenhub_url"):
+        print_line(f"ZenHub: {zh.get('zenhub_url')}")
     children = subs.get("children") or []
     if children:
         print_line(f"\nSub-issues ({len(children)}):")

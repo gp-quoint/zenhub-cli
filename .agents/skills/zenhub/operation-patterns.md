@@ -14,9 +14,11 @@ zh pipeline "Sprint Backlog"      # what's queued for the team
 zh pipeline "In Progress"         # what's actively being worked
 zh mine                           # what's assigned to current user
 zh epic list                      # all epics + state
-zh issue <N>                      # also surfaces parent/child issue counts
+zh issue <N> --json               # one ticket: pipeline + body + ZH/GH URLs (prefer over pipeline fan-out)
 zh subissue list <parent#>        # drill into a parent's sub-issues
 ```
+
+Do **not** start with `zh version` / full `--help` / repo greps — see Lean session bootstrap in [SKILL.md](SKILL.md).
 
 Report the digest, not the raw output. Surface: total open, pipeline distribution, anything that looks stuck (assigned & old without movement, blocked items, anything in In Progress with no recent commits). For 3-tier-using projects, also surface: epics with parent-issues that have unstarted sub-issues, and any orphan sub-issues whose parent has been closed.
 
@@ -102,7 +104,7 @@ For routine operations:
 **Anti-patterns:** leaving `{{PLACEHOLDERS}}` unfilled; bare `#N` in a PR whose repo is not the issue's repo; `Closes #N` that would close the wrong same-repo issue or never touch the ZenHub ticket; using ellipsis `…` placeholders without a later `comment edit`.
 
 - **Close**: ALWAYS include a closing comment (draft + Hard Rule #6). Cite evidence (commit SHA, file:line, audit YAML pointer). Use `-r not planned` or `-r duplicate` when appropriate. Close itself remains propose-first under Hard Rule #2.
-- **Move**: single ticket can fire directly. Bulk moves (>3) → propose-first.
+- **Move**: single ticket can fire directly (`zh move N "<Pipeline>" --json` — trust workspace-scoped `from`/`to`). Bulk moves (>3) → propose-first. Do not pre-scan every pipeline when the ticket number is known.
 - **Reorder**: numeric positions or `top`/`bottom`. Bulk reorders apply position 1 first, then 2, etc. — each call computes from current state.
 - **Assign**: free to fire directly.
 

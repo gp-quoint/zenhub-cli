@@ -1,5 +1,3 @@
-# Issue lookup + lifecycle mutations
-
 query IssueByInfo($repoId: ID!, $issueNumber: Int!) {
   issueByInfo(repositoryId: $repoId, issueNumber: $issueNumber) {
     id
@@ -22,15 +20,17 @@ query IssueByInfo($repoId: ID!, $issueNumber: Int!) {
   }
 }
 
-query IssuePipeline($repoId: ID!, $issueNumber: Int!) {
+# pipelineIssues is unscoped; nodes[0] may be a different workspace than -w.
+query IssuePipeline($repoId: ID!, $issueNumber: Int!, $workspaceId: ID!) {
   issueByInfo(repositoryId: $repoId, issueNumber: $issueNumber) {
     id
     number
     title
-    pipelineIssues {
-      nodes {
-        pipeline { id name issues { totalCount } }
-      }
+    estimate { value }
+    zenhubUrl(workspaceId: $workspaceId)
+    pipelineIssue(workspaceId: $workspaceId) {
+      pipeline { id name issues { totalCount } }
+      priority { name }
     }
   }
 }
@@ -49,10 +49,10 @@ query WorkspaceAssignees($workspaceId: ID!) {
   }
 }
 
-mutation MoveIssue($input: MoveIssueInput!) {
+mutation MoveIssue($input: MoveIssueInput!, $workspaceId: ID!) {
   moveIssue(input: $input) {
     issue {
-      pipelineIssues { nodes { pipeline { name } } }
+      pipelineIssue(workspaceId: $workspaceId) { pipeline { name } }
     }
   }
 }
