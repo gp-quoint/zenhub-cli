@@ -1,6 +1,6 @@
 # `zh` CLI Reference
 
-Authoritative surface: run **`zh --help`** for the command tree and **`zh <command> --help`** for flags (Typer CLI). Do **not** use `zh help <command>` — the `help` subcommand does not take arguments.
+This file is the agent-facing command surface for backlog work. Prefer it (and SKILL.md examples) over shell discovery. Run **`zh <command> --help`** only after a real flag miss or when the user asks whether a capability exists — not before every `edit`/`comment`/`move`. Do **not** use `zh help <command>` — the `help` subcommand does not take arguments. Full tree: `zh --help` (rare).
 
 **Shell only.** All backlog operations go through `zh …`. Do not call the zenhub MCP server for work this skill covers.
 

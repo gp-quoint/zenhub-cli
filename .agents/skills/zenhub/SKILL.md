@@ -18,7 +18,7 @@ description: >-
 
 Manage ZenHub backlogs with the installed **`zh` CLI** (Python + uv) as a black box. Use shell `zh …` for **all** operations — do **not** use the zenhub MCP server.
 
-Do **not** open, edit, clone, or otherwise depend on `zh`'s internals during backlog work. If a needed capability is missing from `zh <cmd> --help`, escalate to the user — do not try to extend the tool from source in a backlog session (CLI maintenance is a separate, explicit task).
+Do **not** open, edit, clone, or otherwise depend on `zh`'s internals during backlog work. If a needed capability is missing from this skill's docs **and** from `zh <cmd> --help` after a real miss, escalate to the user — do not try to extend the tool from source in a backlog session (CLI maintenance is a separate, explicit task).
 
 ## Lean session bootstrap (token hygiene)
 
@@ -26,18 +26,23 @@ Agents waste tokens when every `/zenhub` turn starts with discovery shells. **Do
 
 ```bash
 zh version && zh --help | head …
+zh edit --help   # or create/comment/move/issue --help "just to be sure"
 rg -i zenhub|filing|workspace AGENTS.md README.md docs/ …
 git remote -v; git branch; git log --oneline -5
 zh workspaces; zh pipelines; zh pipeline "…"   # fan-out just to find one ticket
 ```
 
+**Trust the skill docs first.** Common lifecycle flags are already in this file, [cli-reference.md](cli-reference.md), and [operation-patterns.md](operation-patterns.md) — e.g. `zh edit <N> -t "…" -f body.md` then `zh issue <N> --json`. Do **not** re-discover those via `--help` before every write.
+
 | Situation | Do this | Skip |
 |---|---|---|
 | Ticket id known (`#1044`, branch `1044-…`, `Tracked in owner/repo#N`) | One targeted write/read: `zh -r owner/repo -w "…" move 1044 Blocked --json` or `zh issue 1044 --json` | version/help, repo greps, git log, listing every pipeline |
+| Edit title/body (known pattern) | Draft → Hard Rule #6 → `zh edit <N> -t "…" -f body.md` → verify `zh issue <N> --json` | `zh edit --help` |
+| Comment / move / create (documented in skill) | Use the examples in this skill / operation-patterns | per-command `--help` "to confirm flags" |
 | Need "where is this ticket?" | `zh -r … -w … issue N --json` (includes **pipeline**, estimate, priority, ZH+GH URLs) | `zh pipeline` over every column |
 | Need board overview | `zh board` (and maybe one `zh pipeline` / `zh mine`) | full help dump |
 | First write in an unfamiliar project, **no** Engram/AGENTS filing notes | Read project conventions once (Engram → AGENTS/`CLAUDE.md` filing section); ask if missing | repeating that scan every turn |
-| Flag/`--json` fails or user asks "can zh …?" | `zh <that-command> --help` only | `zh --help` whole tree + `zh version` |
+| Real flag/`--json` failure, or user asks "can zh …?", or flag absent from skill docs | `zh <that-command> --help` only | `zh --help` whole tree + `zh version` + preemptive help |
 | Suspected missing feature after a real error | `zh version` once, then escalate or use fallback | version check on every turn |
 
 **Default move (+ optional block reason comment):**
@@ -52,8 +57,9 @@ zh workspaces; zh pipelines; zh pipeline "…"   # fan-out just to find one tick
 ## CLI invocation (Typer)
 
 ```bash
-zh create --help             # per-command flags when needed (NOT `zh help create`)
 zh -r owner/repo -w "Team" board   # global flags before subcommand
+zh edit 36 -t "New title" -f body.md   # title and/or body; then zh issue 36 --json
+# zh create --help           # ONLY after a real miss / unknown flag — NOT `zh help create`
 # zh --help                  # only when exploring an unfamiliar command family
 ```
 
