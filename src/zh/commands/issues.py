@@ -12,6 +12,7 @@ from zh.cli.context import get_state
 from zh.cli.default_command import DefaultCommandGroup
 from zh.cli.output import emit_json, error, info, print_line, success, warn
 from zh.commands._issue_body import (
+    annotate_comment_indices,
     comment_body_for_edit,
     comment_body_or_editor,
     resolve_comment_edit_target,
@@ -106,6 +107,8 @@ def issue_cmd(
         "zenhub_url": zh.get("zenhub_url"),
         "workspace_id": zh.get("workspace_id"),
     }
+    comments = annotate_comment_indices(data.get("comments"))
+    merged["comments"] = comments
     if json_output or state.json_output:
         emit_json({"ok": True, "issue": merged, "sub_issues": subs.get("children", [])})
         return
@@ -124,6 +127,14 @@ def issue_cmd(
         print_line(f"\nSub-issues ({len(children)}):")
         for child in children:
             print_line(f"  #{child.get('number')} {child.get('title')}")
+    if comments:
+        print_line(f"\nComments ({len(comments)}; 1-based index for `zh comment edit`):")
+        for comment in comments:
+            if not isinstance(comment, dict):
+                continue
+            author = comment.get("author")
+            login = author.get("login") if isinstance(author, dict) else comment.get("user") or "?"
+            print_line(f"  [{comment.get('index')}] @{login}")
 
 
 def move_cmd(
@@ -298,11 +309,13 @@ def comment_edit_cmd(
             help="Replace {{KEY}} in the body with value (KEY=value). Repeatable. Uses existing body when no -m/-f/--stdin.",
         ),
     ] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="JSON on stdout")] = False,
 ) -> None:
     """Edit one of YOUR comments on an issue.
 
     Non-interactive: pass -m / -f / --stdin, and/or --fill KEY=value for deferred
     placeholder fill (e.g. after PR URLs are known). Bare invocation opens $EDITOR.
+    Index is 1-based (``comments[].index`` from ``zh issue --json``).
     """
     state = get_state(ctx)
     num = parse_issue_number(issue)
@@ -314,8 +327,11 @@ def comment_edit_cmd(
         error(str(exc))
     try:
         idx, comment_id, old_body = resolve_comment_edit_target(comments, index=index, me=me, issue_num=num)
-    except SystemExit:
-        return
+    except SystemExit as exc:
+        # code 0: no comments / none editable; re-raise error() exits
+        if exc.code in (0, None):
+            return
+        raise
     new_body = comment_body_for_edit(
         old_body,
         message,
@@ -327,12 +343,34 @@ def comment_edit_cmd(
         info("empty buffer — cancelled")
         return
     if new_body.rstrip("\n") == old_body.rstrip("\n"):
+        if json_output or state.json_output:
+            emit_json(
+                {
+                    "ok": True,
+                    "unchanged": True,
+                    "number": num,
+                    "index": idx,
+                    "comment_id": comment_id,
+                }
+            )
+            return
         info("unchanged — skipped")
         return
     try:
         gh_edit_comment(owner_repo, comment_id, new_body)
     except ZhApiError as exc:
         error(str(exc))
+    if json_output or state.json_output:
+        emit_json(
+            {
+                "ok": True,
+                "unchanged": False,
+                "number": num,
+                "index": idx,
+                "comment_id": comment_id,
+            }
+        )
+        return
     success(f"Updated comment {idx} on #{num}")
 
 

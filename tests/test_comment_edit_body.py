@@ -95,6 +95,60 @@ def test_comment_edit_message(runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     assert patched["body"] == "new note"
 
 
+def test_comment_edit_json(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
+
+    patched: dict[str, object] = {}
+    monkeypatch.setattr("zh.cli.state.resolve_context", lambda **_: make_ctx())
+    monkeypatch.setattr("zh.commands.issues.gh_current_user", lambda: "alice")
+    monkeypatch.setattr(
+        "zh.commands.issues.gh_fetch_issue_comments",
+        lambda *_: [{"id": 9, "user": "alice", "body": "old", "createdAt": "t"}],
+    )
+
+    def _edit(owner_repo: str, comment_id: int, body: str) -> None:
+        patched.update(comment_id=comment_id, body=body)
+
+    monkeypatch.setattr("zh.commands.issues.gh_edit_comment", _edit)
+
+    result = runner.invoke(
+        app,
+        ["-r", "acme/widgets", "comment", "edit", "42", "1", "-m", "new note", "--json"],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload == {
+        "ok": True,
+        "unchanged": False,
+        "number": 42,
+        "index": 1,
+        "comment_id": 9,
+    }
+    assert patched["body"] == "new note"
+
+
+def test_annotate_comment_indices() -> None:
+    from zh.commands._issue_body import annotate_comment_indices
+
+    assert annotate_comment_indices([{"body": "a"}, {"body": "b"}]) == [
+        {"body": "a", "index": 1},
+        {"body": "b", "index": 2},
+    ]
+    assert annotate_comment_indices(None) == []
+
+
+def test_comment_edit_rejects_zero_index(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("zh.cli.state.resolve_context", lambda **_: make_ctx())
+    monkeypatch.setattr("zh.commands.issues.gh_current_user", lambda: "alice")
+    monkeypatch.setattr(
+        "zh.commands.issues.gh_fetch_issue_comments",
+        lambda *_: [{"id": 9, "user": "alice", "body": "old", "createdAt": "t"}],
+    )
+    result = runner.invoke(app, ["-r", "acme/widgets", "comment", "edit", "42", "0", "-m", "x"])
+    assert result.exit_code != 0
+    assert "1-based" in result.output or "1.." in result.output
+
+
 def test_comment_edit_fill_placeholders(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
     patched: dict[str, object] = {}
     monkeypatch.setattr("zh.cli.state.resolve_context", lambda **_: make_ctx())

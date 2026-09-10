@@ -111,6 +111,19 @@ def edit_title_body_interactive(old_title: str, old_body: str) -> tuple[str, str
     return parts[0], parts[1] if len(parts) > 1 else ""
 
 
+def annotate_comment_indices(comments: object) -> list[object]:
+    """Attach 1-based ``index`` matching ``zh comment edit <N> <index>``."""
+    if not isinstance(comments, list):
+        return []
+    out: list[object] = []
+    for i, comment in enumerate(comments):
+        if isinstance(comment, dict):
+            out.append({**comment, "index": i + 1})
+        else:
+            out.append(comment)
+    return out
+
+
 def pick_own_comment_index(
     mine: list[tuple[int, GhComment]],
     total: int,
@@ -120,12 +133,17 @@ def pick_own_comment_index(
 ) -> int:
     if index is not None:
         if index < 1 or index > total:
-            error(f"comment index must be 1..{total} (got: {index})")
+            error(
+                f"comment index must be 1..{total} (got: {index}); "
+                "use comments[].index from `zh issue --json` (1-based), "
+                "not 0-based array offsets / jq to_entries keys"
+            )
         return index
     if len(mine) == 1:
         return mine[0][0]
     error(
-        f"multiple comments by @{me} on #{issue_num}; specify index (1..{total}). Run `zh issue` to see comment numbers.",
+        f"multiple comments by @{me} on #{issue_num}; specify index (1..{total}). "
+        "Run `zh issue N --json` and use comments[].index.",
     )
     return 0  # unreachable; satisfies type checker after error()
 

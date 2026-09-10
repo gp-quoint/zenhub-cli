@@ -65,7 +65,7 @@ For routine operations:
   `zh create --json` re-runs duplicate check as a safety net. On `{"ok": false, "blocked": true, "duplicate_check": …}`, surface matches and AskQuestion (**File anyway** / **Abandon** / **Link / comment elsewhere**) before retrying with `--confirm-create`.
 
 - **Edit title/body**: draft + Hard Rule #6 for body rewrites (Hard Rule #2). Then `zh edit <N> -t "…" -f body.md` or `zh edit <N> -f body.md`. **`zh edit` has no `--json`** — confirm the rewrite with `zh issue <N> --json`. Bare `zh edit N` opens `$EDITOR` — avoid in non-interactive agent sessions.
-- **Comment**: draft first, then Hard Rule #6. Prefer `zh comment <N> -f <file>` (flags after the issue are fine; especially after a Zed edit). Use `-m` or a short positional string only for already-approved one-liners. Edit existing: `zh comment edit <N> [index] [-m|-f|--stdin|--fill …]` (zh ≥ 1.12). Not `zh c …` — the `c` alias is add-only.
+- **Comment**: draft first, then Hard Rule #6. Prefer `zh comment <N> -f <file>` (flags after the issue are fine; especially after a Zed edit). Use `-m` or a short positional string only for already-approved one-liners. Edit existing: `zh comment edit <N> <index> [-m|-f|--stdin|--fill …] [--json]` (zh ≥ 1.12). **`index` is 1-based** — use `comments[].index` from `zh issue <N> --json`; never jq `to_entries[].key` (0-based). Not `zh c …` — the `c` alias is add-only.
 
 ---
 
@@ -97,7 +97,7 @@ For routine operations:
      --fill GO_PR=https://github.com/…/pull/2
    ```
 
-   Resolve `<index>` from `zh -r owner/issue-repo issue <N>` (1-based comment list). If you only have one own comment, omit index.
+   Resolve `<index>` from `zh -r owner/issue-repo issue <N> --json` → `comments[].index` (**1-based**). Never use 0-based array offsets. If you only have one own comment, omit index.
 
 4. Return the PR URL(s) to the user.
 

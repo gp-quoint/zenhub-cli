@@ -65,13 +65,15 @@ zh edit 36 -t "New title" -f body.md   # title and/or body; then zh issue 36 --j
 
 - **Body input:** prefer `-f <file>` (works after the issue number: `zh comment 42 -f notes.md`). Also `--stdin`; create/edit use `-b`/`-d`; **comment add** and **comment edit** accept `-m` / `-f` / `--stdin`. Bare `zh comment <N>` / `zh edit <N>` / `zh comment edit <N>` opens `$EDITOR` — avoid in non-interactive agent sessions unless intentional.
 - **`zh comment edit` body flags (zh ≥ 1.12):** `-m` / `-f` / `--stdin` replace the whole comment; `--fill KEY=value` (repeatable) replaces `{{KEY}}` in the existing body (or in the `-m`/`-f`/`--stdin` body). Prefer `--fill` for deferred PR URL fill after `gh pr create`.
+- **Comment edit index is 1-based:** `zh comment edit <N> <index>` uses **1..len(comments)**. Take `comments[].index` from `zh issue <N> --json`. Do **not** use jq `to_entries[].key` (0-based) or Python `enumerate` without `+1`. Index `0` is always invalid.
 - **No `zh pr` / `zh link`:** linking PRs to issues is GitHub + a comment — see [operation-patterns.md](operation-patterns.md)#link-prs-to-zenhub-issues. Create PRs with `gh pr create`, then notify or fill the issue comment with final URLs.
-- **Machine output:** `--json` on stdout (human info on stderr) where supported; `-q` emits only the new issue number on create. Prefer `--json` on writes agents must verify (`zh move … --json`, `zh sprint add … --json`). **`zh edit` has no `--json`** — apply with `-f`/`-t`/`-d`, then verify via `zh issue <N> --json`.
+- **Machine output:** `--json` on stdout (human info on stderr) where supported; `-q` emits only the new issue number on create. Prefer `--json` on writes agents must verify (`zh move … --json`, `zh sprint add … --json`, `zh comment edit … --json`). **`zh edit` has no `--json`** — apply with `-f`/`-t`/`-d`, then verify via `zh issue <N> --json`.
 - **Nested subcommands:** `zh sprint add current 42`, `zh comment edit 42 [index]`, `zh epic create "Title"`. Comment add is the default: `zh comment 42 …` ≡ `zh comment add 42 …`. Sprint show defaults similarly: `zh sprint` / `zh sprint current` ≡ `zh sprint show current`.
 - **Sprint membership:** `zh sprint add current 42` and `zh sa current 42` both work. Prefer the explicit form in scripts.
 - **Pipeline moves:** `zh move 42 "In Progress"` or unique prefix/substring (`zh move 42 progress`). `--json` returns `{ok, number, title, from, to}` with the **workspace-scoped** prior/new pipeline. Mutations invalidate GraphQL read caches (in-process + on-disk gen), so a follow-up `zh pipeline` / `zh sprint` sees fresh state without `ZH_GRAPHQL_CACHE_FORCE=1`.
 - **`zh c` vs `zh comment`:** `c` is add-only (no `edit` subcommand). Use `zh comment edit …` for edits.
-- **`zh issue <N> [--json]`:** GitHub body/comments **plus** workspace-scoped `pipeline`, `estimate`, `priority`, `zenhub_url`, `workspace_id`. Prefer this over pipeline fan-out when locating one ticket.
+- **`zh issue <N> [--json]`:** GitHub body/comments **plus** workspace-scoped `pipeline`, `estimate`, `priority`, `zenhub_url`, `workspace_id`. Each comment includes **`index`** (1-based) for `zh comment edit`. Prefer this over pipeline fan-out when locating one ticket.
+- **Sandbox / GraphQL cache:** L2 lives under `~/.cache/zh/graphql`. If that path is not writable (Cursor workspace sandbox), zh falls back to in-process L1 and continues. For full L2 under sandbox, add `~/.cache/zh` to `~/.cursor/sandbox.json` → `additionalReadwritePaths` (and `~/.cache/huggingface` for `zh similar`).
 
 ## CLI setup
 

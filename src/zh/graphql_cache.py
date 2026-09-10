@@ -1,4 +1,8 @@
-"""GraphQL read caching: in-process L1 + diskcache L2."""
+"""GraphQL read caching: in-process L1 + diskcache L2.
+
+L2 lives under ``~/.cache/zh/graphql`` by default. When that path is not
+writable (e.g. workspace sandbox), open/set fail soft and zh continues on L1.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
@@ -20,8 +25,10 @@ _PROCESS_READ_CACHE: dict[str, JsonDict] = {}
 _GEN_KEY = "__zh_graphql_cache_gen__"
 _DEFAULT_TTL = "5m"
 
-# Mutable holder avoids ``global`` statements for the open Cache handle.
-_DISK: dict[str, Cache | Path | None] = {"cache": None, "dir": None}
+# mutable holder avoids ``global`` for the open Cache handle
+_DISK: dict[str, Cache | Path | bool | None] = {"cache": None, "dir": None, "readonly": False}
+
+_DISK_IO_ERRORS = (OSError, sqlite3.OperationalError, PermissionError)
 
 
 def is_graphql_mutation(query: str) -> bool:
@@ -63,15 +70,31 @@ def _token_fingerprint(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
 
 
-def _open_disk_cache() -> Cache:
+def _mark_disk_readonly() -> None:
+    existing = _DISK["cache"]
+    if isinstance(existing, Cache):
+        existing.close()
+    _DISK["cache"] = None
+    _DISK["dir"] = None
+    _DISK["readonly"] = True
+
+
+def _open_disk_cache() -> Cache | None:
+    """Open L2 diskcache, or ``None`` when unavailable/read-only (use L1)."""
+    if _DISK.get("readonly"):
+        return None
     path = graphql_cache_dir()
     existing = _DISK["cache"]
     if isinstance(existing, Cache) and _DISK["dir"] == path:
         return existing
     if isinstance(existing, Cache):
         existing.close()
-    path.mkdir(parents=True, exist_ok=True)
-    cache = Cache(str(path))
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        cache = Cache(str(path))
+    except _DISK_IO_ERRORS:
+        _mark_disk_readonly()
+        return None
     _DISK["cache"] = cache
     _DISK["dir"] = path
     return cache
@@ -84,10 +107,15 @@ def close_disk_cache() -> None:
         existing.close()
     _DISK["cache"] = None
     _DISK["dir"] = None
+    _DISK["readonly"] = False
 
 
 def _current_gen(cache: Cache) -> int:
-    value = cast(object, cache.get(_GEN_KEY, default=0))  # type: ignore[reportUnknownMemberType]
+    try:
+        value = cast(object, cache.get(_GEN_KEY, default=0))  # type: ignore[reportUnknownMemberType]
+    except _DISK_IO_ERRORS:
+        _mark_disk_readonly()
+        return 0
     try:
         return int(value or 0)  # type: ignore[arg-type]
     except (TypeError, ValueError):
@@ -99,9 +127,15 @@ def bump_graphql_cache_gen() -> int:
     if not disk_cache_enabled():
         return 0
     cache = _open_disk_cache()
-    nxt = _current_gen(cache) + 1
-    cache.set(_GEN_KEY, nxt)  # type: ignore[reportUnknownMemberType]
-    return nxt
+    if cache is None:
+        return 0
+    try:
+        nxt = _current_gen(cache) + 1
+        cache.set(_GEN_KEY, nxt)  # type: ignore[reportUnknownMemberType]
+        return nxt
+    except _DISK_IO_ERRORS:
+        _mark_disk_readonly()
+        return 0
 
 
 def _make_cache_key(query: str, variables: GraphQLVariables | None, token: str, gen: int) -> str:
@@ -128,7 +162,10 @@ def cached_graphql_read(
     disk: Cache | None = None
     if disk_cache_enabled() and not force:
         disk = _open_disk_cache()
-        gen = _current_gen(disk)
+        if disk is not None:
+            gen = _current_gen(disk)
+            if _DISK.get("readonly"):
+                disk = None
 
     key = _make_cache_key(query, variables, token, gen)
 
@@ -137,7 +174,12 @@ def cached_graphql_read(
         return cached
 
     if disk is not None:
-        hit = cast(object, disk.get(key, default=None))  # type: ignore[reportUnknownMemberType]
+        try:
+            hit = cast(object, disk.get(key, default=None))  # type: ignore[reportUnknownMemberType]
+        except _DISK_IO_ERRORS:
+            _mark_disk_readonly()
+            hit = None
+            disk = None
         if isinstance(hit, dict):
             cached_hit = cast(JsonDict, hit)
             _PROCESS_READ_CACHE[key] = cached_hit
@@ -149,7 +191,11 @@ def cached_graphql_read(
     if disk_cache_enabled() and not force:
         if disk is None:
             disk = _open_disk_cache()
-        disk.set(key, result, expire=parse_ttl_seconds())  # type: ignore[reportUnknownMemberType]
+        if disk is not None:
+            try:
+                disk.set(key, result, expire=parse_ttl_seconds())  # type: ignore[reportUnknownMemberType]
+            except _DISK_IO_ERRORS:
+                _mark_disk_readonly()
 
     return result
 

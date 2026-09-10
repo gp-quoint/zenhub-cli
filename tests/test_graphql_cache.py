@@ -169,6 +169,36 @@ def test_bump_gen_increments(monkeypatch, tmp_path) -> None:
     assert bump_graphql_cache_gen() == 2
 
 
+def test_disk_cache_readonly_falls_back_to_process(monkeypatch, tmp_path) -> None:
+    """Readonly L2 must not crash; L1 process cache still works."""
+    import zh.graphql_cache as gc
+
+    monkeypatch.setenv("ZH_GRAPHQL_CACHE", "1")
+    monkeypatch.setenv("ZH_GRAPHQL_CACHE_DIR", str(tmp_path / "gql"))
+    monkeypatch.delenv("ZH_GRAPHQL_CACHE_FORCE", raising=False)
+    clear_process_read_cache()
+    close_disk_cache()
+    calls = 0
+
+    def _direct(query, variables=None, *, token, timeout=30.0, url=zh.api.ZH_GRAPHQL_URL):
+        nonlocal calls
+        calls += 1
+        return {"data": {"ok": True, "n": calls}}
+
+    monkeypatch.setattr(zh.api, "_graphql_request_direct", _direct)
+
+    class BoomCache:
+        def __init__(self, *_a, **_k):
+            raise OSError("attempt to write a readonly database")
+
+    monkeypatch.setattr(gc, "Cache", BoomCache)
+
+    zh.api.graphql_request("query { viewer { id } }", {}, token="tok")
+    zh.api.graphql_request("query { viewer { id } }", {}, token="tok")
+    assert calls == 1
+    assert bump_graphql_cache_gen() == 0
+
+
 def test_paginate_pages_stops_on_stuck_cursor() -> None:
     calls = 0
 

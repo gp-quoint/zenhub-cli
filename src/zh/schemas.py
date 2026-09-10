@@ -309,6 +309,7 @@ class GhComment(TypedDict, total=False):
     user: str
     created: str
     body: str
+    index: int  # 1-based for zh comment edit
 
 
 class GhIssue(TypedDict, total=False):

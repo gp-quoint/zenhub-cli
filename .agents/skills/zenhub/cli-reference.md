@@ -74,6 +74,8 @@ zh comment edit 42 2 --fill PYTHON_PR=https://github.com/org/py/pull/1 \
 | `ZH_GRAPHQL_CACHE_FORCE=1` | Skip L2 for this process |
 | `ZH_GRAPHQL_CACHE_DIR` | Override L2 directory |
 
+L2 defaults to `~/.cache/zh/graphql`. If that path is not writable (e.g. Cursor sandbox without `additionalReadwritePaths`), zh **degrades to L1** and continues; it does not abort. To enable L2 under sandbox, add `~/.cache/zh` (and optionally `~/.cache/huggingface` for `zh similar`) to `~/.cursor/sandbox.json` → `additionalReadwritePaths`.
+
 Precedence: **flag > env / config > git-remote + first-workspace fallback**. Use `-w` when a repo connects to multiple workspaces.
 
 ---
@@ -86,7 +88,7 @@ Precedence: **flag > env / config > git-remote + first-workspace fallback**. Use
 | `zh board [--all] [--json]` | Per-pipeline issue counts (`--all` includes closed) |
 | `zh pipelines [--json]` | Pipeline names (plain one-per-line output) |
 | `zh pipeline "<name>" [--json]` | Issues in a pipeline (top = highest priority) |
-| `zh issue <N> [--json]` | Full detail: GH body/comments **plus** workspace-scoped `pipeline`, `estimate`, `priority`, `zenhub_url`, `workspace_id`, parent/sub-issue counts |
+| `zh issue <N> [--json]` | Full detail: GH body/comments **plus** workspace-scoped `pipeline`, `estimate`, `priority`, `zenhub_url`, `workspace_id`, parent/sub-issue counts. Each comment has **`index`** (1-based) for `zh comment edit` |
 | `zh mine [user] [--no-urls] [--json]` | Issues assigned to current or specified user |
 | `zh users [--json]` | Assignable users (via `gh` collaborators; plain one-per-line output) |
 | `zh workspaces [--json]` | Workspaces for the repo (● = active target) |
@@ -113,7 +115,7 @@ Precedence: **flag > env / config > git-remote + first-workspace fallback**. Use
 | `zh edit <N> [-t title] [-d|-b body] [-f file] [--stdin]` | Edit title/body; bare `zh edit N` opens `$EDITOR`. **No `--json`** — verify with `zh issue <N> --json` |
 | `zh comment <N> [text] [-m text] [-f file] [--stdin]` | Add comment (default `add` subcommand). Flags may follow the issue. Bare `zh comment N` opens `$EDITOR` |
 | `zh comment add <N> …` | Explicit add (same as bare `zh comment <N> …`) |
-| `zh comment edit <N> [index] [-m text] [-f file] [--stdin] [--fill KEY=value]` | Edit your comment (1-based index from `zh issue`; omit index to pick). Body flags (zh ≥ 1.12) for agents; `--fill` replaces `{{KEY}}`. Bare opens `$EDITOR` |
+| `zh comment edit <N> [index] [-m text] [-f file] [--stdin] [--fill KEY=value] [--json]` | Edit your comment. **`index` is 1-based** (`comments[].index` from `zh issue --json`; never 0 / jq `to_entries` keys). Body flags (zh ≥ 1.12) for agents; `--fill` replaces `{{KEY}}`. `--json`: `{ok, unchanged, number, index, comment_id}`. Bare opens `$EDITOR` |
 | `zh c <N> …` | Hidden add-only alias — **cannot** run `edit`; use `zh comment edit …` |
 | `zh attach <N>` | Open issue in browser + print URL for drag-and-drop attachments (GitHub API has no upload) |
 | `zh close <N> [comment] [-r completed\|not planned\|duplicate]` | Close issue |
