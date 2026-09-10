@@ -77,18 +77,18 @@ zh edit 36 -t "New title" -f body.md   # title and/or body; then zh issue 36 --j
 
 ## CLI setup
 
-`zh` is a uv-managed Python CLI. The launcher (`zh` at the install root) runs `uv run --project <checkout> python -m zh …` when `uv` is on PATH, and clears ambient `VIRTUAL_ENV` / `UV_PROJECT*` / `PYTHONPATH` so direnv in another repo cannot steal the venv.
+`zh` is a uv-managed Python CLI installed as an editable **uv tool** (`uv tool install --editable <checkout>`). The console entry point (`zh` → `zh.cli.main:run`) lives under `~/.local/bin` via the uv tools bin dir — do **not** symlink the repo's bash `zh` launcher or invoke via `uv run`.
 
 | Requirement | Notes |
 |---|---|
-| **uv** | Required to launch `zh` (`brew install uv` or [docs.astral.sh/uv](https://docs.astral.sh/uv/)) |
-| **Python 3.13+** | Managed by uv in the install checkout |
+| **uv** | Required to install/update `zh` (`brew install uv` or [docs.astral.sh/uv](https://docs.astral.sh/uv/)) |
+| **Python 3.13+** | Managed by the uv tool environment |
 | **gh, jq, git** | Same as before — GitHub auth via `gh auth status` |
 | **~/.config/zh/config** | `ZH_TOKEN` (GraphQL); optional `ZH_REST_TOKEN`, `ZH_REPO`, `ZH_WORKSPACE` |
 
-Install (typical): clone/symlink the checkout, put `zh` on PATH (e.g. `ln -sf ~/dev/github/gp-quoint/zenhub-cli/zh ~/.local/bin/zh`). First run syncs deps via uv automatically.
+Install (dotfiles): `install/uv-tools` editable-installs `~/dev/github/gp-quoint/zenhub-cli` when present. Manual: `uv tool install --editable --force ~/dev/github/gp-quoint/zenhub-cli`.
 
-**Similarity search** (`zh similar`, built-in duplicate pre-flight on `zh create` / planning creates) is a core dependency — first `uv sync` / `zh` run pulls in `sentence-transformers` (+ torch). First embedding load also caches the model under `~/.cache/huggingface/` (~80MB).
+**Similarity search** (`zh similar`, built-in duplicate pre-flight on `zh create` / planning creates) is a core dependency — the editable tool install pulls in `sentence-transformers` (+ torch). First embedding load also caches the model under `~/.cache/huggingface/` (~80MB).
 
 **Version:** VCS-derived (`hatch-vcs`); do not expect a static string in `pyproject.toml`. Agents should **not** run `zh version` every turn — see Lean session bootstrap. Human install verify (once): `zh version`, `zh similar "login bug" --json`. Check version only after a real capability miss (`comment edit --fill`, workspace-scoped move/`issue` pipeline fields, etc.).
 
