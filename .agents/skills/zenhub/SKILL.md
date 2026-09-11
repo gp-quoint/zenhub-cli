@@ -38,6 +38,7 @@ zh workspaces; zh pipelines; zh pipeline "…"   # fan-out just to find one tick
 |---|---|---|
 | Ticket id known (`#1044`, branch `1044-…`, `Tracked in owner/repo#N`) | One targeted write/read: `zh -r owner/repo -w "…" move 1044 Blocked --json` or `zh issue 1044 --json` | version/help, repo greps, git log, listing every pipeline |
 | Edit title/body (known pattern) | Draft → Hard Rule #6 → `zh edit <N> -t "…" -f body.md` → verify `zh issue <N> --json` | `zh edit --help` |
+| Close (agent) | Draft close note → Hard Rule #6 → `zh close <N> -r completed -f /tmp/close.md --json` (or `-m` / `--stdin`). Trust `{state, reason, comment_added}`; optional `zh issue <N> --json` | inventing flags; embedding multi-line body as argv; relying on PR `Closes` after merge to a non-default branch |
 | Comment / move / create (documented in skill) | Use the examples in this skill / operation-patterns | per-command `--help` "to confirm flags" |
 | Need "where is this ticket?" | `zh -r … -w … issue N --json` (includes **pipeline**, estimate, priority, ZH+GH URLs) | `zh pipeline` over every column |
 | Need board overview | `zh board` (and maybe one `zh pipeline` / `zh mine`) | full help dump |
@@ -59,15 +60,17 @@ zh workspaces; zh pipelines; zh pipeline "…"   # fan-out just to find one tick
 ```bash
 zh -r owner/repo -w "Team" board   # global flags before subcommand
 zh edit 36 -t "New title" -f body.md   # title and/or body; then zh issue 36 --json
+zh close 41 -r completed -f /tmp/close.md --json   # multi-line close note; then optional zh issue 41 --json
 # zh create --help           # ONLY after a real miss / unknown flag — NOT `zh help create`
 # zh --help                  # only when exploring an unfamiliar command family
 ```
 
-- **Body input:** prefer `-f <file>` (works after the issue number: `zh comment 42 -f notes.md`). Also `--stdin`; create/edit use `-b`/`-d`; **comment add** and **comment edit** accept `-m` / `-f` / `--stdin`. Bare `zh comment <N>` / `zh edit <N>` / `zh comment edit <N>` opens `$EDITOR` — avoid in non-interactive agent sessions unless intentional.
+- **Body input:** prefer `-f <file>` (works after the issue number: `zh comment 42 -f notes.md`, `zh close 41 -f close.md`). Also `--stdin`; create/edit use `-b`/`-d`; **comment add**, **comment edit**, and **close** accept `-m` / `-f` / `--stdin`. Bare `zh comment <N>` / `zh edit <N>` / `zh comment edit <N>` opens `$EDITOR` — avoid in non-interactive agent sessions unless intentional.
 - **`zh comment edit` body flags (zh ≥ 1.12):** `-m` / `-f` / `--stdin` replace the whole comment; `--fill KEY=value` (repeatable) replaces `{{KEY}}` in the existing body (or in the `-m`/`-f`/`--stdin` body). Prefer `--fill` for deferred PR URL fill after `gh pr create`.
 - **Comment edit index is 1-based:** `zh comment edit <N> <index>` uses **1..len(comments)**. Take `comments[].index` from `zh issue <N> --json`. Do **not** use jq `to_entries[].key` (0-based) or Python `enumerate` without `+1`. Index `0` is always invalid.
-- **No `zh pr` / `zh link`:** linking PRs to issues is GitHub + a comment — see [operation-patterns.md](operation-patterns.md)#link-prs-to-zenhub-issues. Create PRs with `gh pr create`, then notify or fill the issue comment with final URLs.
-- **Machine output:** `--json` on stdout (human info on stderr) where supported; `-q` emits only the new issue number on create. Prefer `--json` on writes agents must verify (`zh move … --json`, `zh sprint add … --json`, `zh comment edit … --json`). **`zh edit` has no `--json`** — apply with `-f`/`-t`/`-d`, then verify via `zh issue <N> --json`.
+- **No `zh pr` / `zh link`:** linking PRs to issues is GitHub + a comment — see [operation-patterns.md](operation-patterns.md)#link-prs-to-zenhub-issues. Create PRs with `gh pr create`, then notify or fill the issue comment with final URLs. After `gh pr merge`, see **non-default-branch auto-close** below — do not assume `Closes #N` closed the ticket.
+- **Machine output:** `--json` on stdout (human info on stderr) where supported; `-q` emits only the new issue number on create. Prefer `--json` on writes agents must verify (`zh move … --json`, `zh sprint add … --json`, `zh comment edit … --json`, `zh close … --json`, `zh reopen … --json`). **`zh edit` has no `--json`** — apply with `-f`/`-t`/`-d`, then verify via `zh issue <N> --json`.
+- **Close (agent):** `zh close <N> -r completed -f /tmp/close.md --json` → `{ok, number, title, state, reason, comment_added, pipeline?}`. Positional comment is fine for one-liners only. After merge into a non-default branch, always close explicitly (see Hard Rule #1).
 - **Nested subcommands:** `zh sprint add current 42`, `zh comment edit 42 [index]`, `zh epic create "Title"`. Comment add is the default: `zh comment 42 …` ≡ `zh comment add 42 …`. Sprint show defaults similarly: `zh sprint` / `zh sprint current` ≡ `zh sprint show current`.
 - **Sprint membership:** `zh sprint add current 42` and `zh sa current 42` both work. Prefer the explicit form in scripts.
 - **Pipeline moves:** `zh move 42 "In Progress"` or unique prefix/substring (`zh move 42 progress`). `--json` returns `{ok, number, title, from, to}` with the **workspace-scoped** prior/new pipeline. Mutations invalidate GraphQL read caches (in-process + on-disk gen), so a follow-up `zh pipeline` / `zh sprint` sees fresh state without `ZH_GRAPHQL_CACHE_FORCE=1`.
@@ -146,7 +149,7 @@ One question per gate. Do not bury Proceed/Change/Zed inside free-form prose whe
 
 ### 1. Never auto-close via `Closes #N` for internal task IDs
 
-GitHub's parser sees `Closes #400` (or `Fixes #400`, `Resolves #400`) in a commit message or PR description, and auto-closes issue #400 in the same repo when the commit/PR lands on the default branch. There is NO disambiguation — any `#N` reference resolves to a same-repo issue if one exists with that number.
+GitHub's parser sees `Closes #400` (or `Fixes #400`, `Resolves #400`) in a commit message or PR description, and auto-closes issue #400 in the same repo when the commit/PR lands on the **repo default branch**. There is NO disambiguation — any `#N` reference resolves to a same-repo issue if one exists with that number.
 
 For internal local task IDs that may collide with real GitHub issue numbers, use a notation GitHub can't parse:
 - `[task 400]` (bracketed, no `#`)
@@ -167,6 +170,14 @@ Doing so 404s if no such GitHub issue exists, or wrongly links to (or closes) an
 - Notify the issue with PR URLs via either:
   1. **Preferred (single comment):** post once **after** `gh pr create` with final URLs (`zh -r owner/issue-repo comment <N> -f …`), or
   2. **Deferred fill (zh ≥ 1.12):** post early with `{{PLACEHOLDERS}}`, then `zh comment edit <N> <index> --fill KEY=url …` once URLs exist.
+
+**Non-default-branch merges (`Closes` is a no-op):** GitHub only auto-closes via `Closes` / `Fixes` / `Resolves` when the PR merges into the repo **default** branch (`defaultBranchRef`). Merging into `develop`, release, or env branches does **not** close the issue — even with a correct `Closes owner/repo#N` in the PR body.
+
+Common GitOps layout: env branch `develop` ≠ default `master` (e.g. demeter-hostname-oracle). After `gh pr merge` when the ticket must close:
+
+1. Check whether the PR base is the default: `gh pr view <PR> --json baseRefName` vs `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`.
+2. If `baseRefName != defaultBranchRef`, **always** `zh close <N> -r completed -f /tmp/close.md --json` (do not wait for keywords).
+3. Confirm with close JSON (`state: CLOSED`) or `zh issue <N> --json`.
 
 ### 2. Propose-first for ALL destructive operations
 

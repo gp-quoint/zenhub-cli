@@ -11,6 +11,7 @@ from zh.api import ZhApiError
 from zh.cli.context import get_state
 from zh.cli.default_command import DefaultCommandGroup
 from zh.cli.output import emit_json, error, info, print_line, success, warn
+from zh.commands._close_reopen import close_issue_with_output, reopen_issue_with_output, resolve_closing_body
 from zh.commands._issue_body import (
     annotate_comment_indices,
     comment_body_for_edit,
@@ -23,10 +24,8 @@ from zh.gh_ops import (
     gh_current_user,
     gh_edit_comment,
     gh_fetch_issue_comments,
-    gh_issue_close,
     gh_issue_comment,
     gh_issue_delete,
-    gh_issue_reopen,
     gh_issue_view,
     open_issue_url,
 )
@@ -473,31 +472,43 @@ def unblock_cmd(
 def close_cmd(
     ctx: typer.Context,
     issue: Annotated[str, typer.Argument(help="Issue number")],
-    comment: Annotated[str | None, typer.Argument(help="Optional closing comment")] = None,
+    text: Annotated[str | None, typer.Argument(help="Optional closing comment (one-liner)")] = None,
     reason: Annotated[str, typer.Option("-r", "--reason", help="completed|not planned|duplicate")] = "completed",
+    message: Annotated[str | None, typer.Option("-m", "--message", help="Closing comment text")] = None,
+    body_file: Annotated[Path | None, typer.Option("-f", "--file", help="Read closing comment from file")] = None,
+    from_stdin: Annotated[bool, typer.Option("--stdin", help="Read closing comment from stdin")] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="JSON on stdout")] = False,
 ) -> None:
-    """Close an issue."""
+    """Close an issue.
+
+    Closing comment is optional. Prefer ``-f`` / ``--stdin`` / ``-m`` for multi-line
+    agent notes; positional ``text`` remains for one-liners.
+    """
     state = get_state(ctx)
     num = parse_issue_number(issue)
-    try:
-        gh_issue_close(state.context().owner_repo, num, comment=comment or "", reason=reason)
-    except ZhApiError as exc:
-        error(str(exc))
-    success(f"Closed #{num}")
+    body = resolve_closing_body(message, text, body_file, from_stdin=from_stdin)
+    close_issue_with_output(
+        state.context(),
+        num,
+        body=body,
+        reason=reason,
+        should_emit_json=json_output or state.json_output,
+    )
 
 
 def reopen_cmd(
     ctx: typer.Context,
     issue: Annotated[str, typer.Argument(help="Issue number")],
+    json_output: Annotated[bool, typer.Option("--json", help="JSON on stdout")] = False,
 ) -> None:
     """Reopen a closed issue."""
     state = get_state(ctx)
     num = parse_issue_number(issue)
-    try:
-        gh_issue_reopen(state.context().owner_repo, num)
-    except ZhApiError as exc:
-        error(str(exc))
-    success(f"Reopened #{num}")
+    reopen_issue_with_output(
+        state.context(),
+        num,
+        should_emit_json=json_output or state.json_output,
+    )
 
 
 def delete_cmd(

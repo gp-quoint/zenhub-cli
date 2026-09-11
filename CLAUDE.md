@@ -40,8 +40,8 @@ zh comment edit <issue> [N]   # Edit comment N (1-based from zh issue; omit N to
                               # Non-interactive: -m / -f / --stdin / --fill KEY=value
                               # --fill replaces {{KEY}} (deferred PR URL fill)
 zh edit <issue>               # Edit title/description via $EDITOR (or -t/-d/-f)
-zh close <issue> [comment]    # Close issue (-r completed|not planned|duplicate)
-zh reopen <issue>             # Reopen closed issue
+zh close <issue> [comment]    # Close issue (-r completed|not planned|duplicate; -m/-f/--stdin; --json)
+zh reopen <issue>             # Reopen closed issue (--json)
 zh delete <issue> [-y]        # DANGER: permanently delete a GitHub issue (via gh; prefer close). Prompts when interactive; -y skips
 
 # Create issues
@@ -184,14 +184,14 @@ zh issue 42
 
 **Closing completed work:**
 ```bash
-# Close an issue when done
-zh close 123
+# Close with a multi-line note (preferred for agents)
+zh close 123 -r completed -f /tmp/close.md --json
 
-# Close with a comment
+# One-liner comment
 zh close 123 "Completed in PR #456"
 
 # Reopen if needed
-zh reopen 123
+zh reopen 123 --json
 ```
 
 ## Project Structure

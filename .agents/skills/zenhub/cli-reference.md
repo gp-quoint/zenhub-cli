@@ -22,7 +22,7 @@ zh comment edit --help
 zh create "Title" … --json          # JSON on stdout; human info on stderr
 zh -r org/repo --json board         # root --json applies to the command
 
-# Body input (create, edit, comment add/edit, planning creates)
+# Body input (create, edit, comment add/edit, close, planning creates)
 zh create "Title" -f body.md
 zh create "Title" --stdin < body.md
 zh edit 42 -t "New title" -f body.md
@@ -38,9 +38,13 @@ zh comment edit 42 2 -f final.md
 zh comment edit 42 2 -m "corrected note"
 zh comment edit 42 2 --fill PYTHON_PR=https://github.com/org/py/pull/1 \
   --fill GO_PR=https://github.com/org/go/pull/1
+
+# Close (agent) — prefer -f/--stdin for multi-line notes; --json for verify
+zh close 41 -r completed -f /tmp/close.md --json
+zh reopen 41 --json
 ```
 
-**PRs:** there is no `zh pr` / `zh link`. Open with `gh pr create`; attach to a ZenHub issue via PR-body `owner/repo#N` (or full URL) plus `zh -r owner/issue-repo comment <N>` and/or deferred `--fill`. See [operation-patterns.md](operation-patterns.md)#link-prs-to-zenhub-issues.
+**PRs:** there is no `zh pr` / `zh link`. Open with `gh pr create`; attach to a ZenHub issue via PR-body `owner/repo#N` (or full URL) plus `zh -r owner/issue-repo comment <N>` and/or deferred `--fill`. See [operation-patterns.md](operation-patterns.md)#link-prs-to-zenhub-issues. **`Closes`/`Fixes`/`Resolves` only auto-close on merge into the repo default branch** — after merge to `develop`/env branches, run `zh close` explicitly.
 
 **Issue numbers:** `#` prefix optional (`42` or `#42`).
 
@@ -118,8 +122,8 @@ Precedence: **flag > env / config > git-remote + first-workspace fallback**. Use
 | `zh comment edit <N> [index] [-m text] [-f file] [--stdin] [--fill KEY=value] [--json]` | Edit your comment. **`index` is 1-based** (`comments[].index` from `zh issue --json`; never 0 / jq `to_entries` keys). Body flags (zh ≥ 1.12) for agents; `--fill` replaces `{{KEY}}`. `--json`: `{ok, unchanged, number, index, comment_id}`. Bare opens `$EDITOR` |
 | `zh c <N> …` | Hidden add-only alias — **cannot** run `edit`; use `zh comment edit …` |
 | `zh attach <N>` | Open issue in browser + print URL for drag-and-drop attachments (GitHub API has no upload) |
-| `zh close <N> [comment] [-r completed\|not planned\|duplicate]` | Close issue |
-| `zh reopen <N>` | Reopen closed issue |
+| `zh close <N> [comment] [-m text] [-f file] [--stdin] [-r completed\|not planned\|duplicate] [--json]` | Close issue. Prefer `-f`/`--stdin`/`-m` for multi-line agent notes; positional comment for one-liners. `--json`: `{ok, number, title, state, reason, comment_added, pipeline?}` (`pipeline` = prior workspace pipeline when available) |
+| `zh reopen <N> [--json]` | Reopen closed issue. `--json`: `{ok, number, title, state}` |
 | `zh delete <N> [-y]` | **DANGER** — permanent GitHub delete. `-y` skips interactive confirm. Prefer `zh close`. |
 | `zh move <N> "<pipeline>" [--json]` | Move between pipelines. Human line shows workspace-scoped `from → to`. `--json`: `{ok, number, title, from, to}` (not unscoped `pipelineIssues[0]`) |
 | `zh reorder <N> <position\|top\|bottom>` | Reorder within current pipeline (`top` = 1) |
@@ -188,7 +192,7 @@ Each level has an identical noun surface: `zh initiative`, `zh project`, `zh epi
 | `add <parent#> <child#> […]` | Attach sub-issues (single API call) |
 | `remove <parent#> <child#> […]` | Detach sub-issues |
 | `update <N> [-t title] [-d body] [-f file]` | Edit title/body |
-| `close <N> [comment] [-r reason]` / `reopen <N>` | Close / reopen |
+| `close <N> [comment] [-m|-f|--stdin] [-r reason] [--json]` / `reopen <N> [--json]` | Close / reopen (same body + `--json` surface as top-level) |
 | `delete` | Stub — errors and points to `zh delete <N>` (no issue arg) |
 
 Board-level Bug/Feature/Task: use `zh create -t <type>`. To delete any planning issue: `zh delete <N>` (DANGER).

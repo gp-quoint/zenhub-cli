@@ -9,9 +9,10 @@ import typer
 
 from zh.api import ZhApiError
 from zh.cli.output import emit_create_links, emit_json, error, print_line, success, warn
+from zh.commands._close_reopen import close_issue_with_output, reopen_issue_with_output, resolve_closing_body
 from zh.commands._duplicate_check import optional_duplicate_check
 from zh.commands._issue_body import resolve_create_body
-from zh.gh_ops import gh_issue_close, gh_issue_reopen, gh_issue_view
+from zh.gh_ops import gh_issue_view
 from zh.graphql_ops import add_sub_issues, remove_sub_issues
 from zh.issue_ops import create_issue, parse_issue_number, update_issue
 from zh.planning_ops import (
@@ -193,26 +194,46 @@ def run_noun_update(state: CliState, *, type_name: str, issue: str, title: str |
     success(f"Updated #{result['number']}: {result['title']}")
 
 
-def run_noun_close(state: CliState, *, type_name: str, issue: str, comment: str | None, reason: str) -> None:
+def run_noun_close(
+    state: CliState,
+    *,
+    type_name: str,
+    issue: str,
+    text: str | None,
+    reason: str,
+    message: str | None = None,
+    body_file: Path | None = None,
+    from_stdin: bool = False,
+    json_output: bool = False,
+) -> None:
     num = parse_issue_number(issue)
     ctx_obj = state.context()
     warn_type_mismatch(ctx_obj, type_name, num, "close")
-    try:
-        gh_issue_close(ctx_obj.owner_repo, num, comment=comment or "", reason=reason)
-    except ZhApiError as exc:
-        error(str(exc))
-    success(f"Closed #{num}")
+    body = resolve_closing_body(message, text, body_file, from_stdin=from_stdin)
+    close_issue_with_output(
+        ctx_obj,
+        num,
+        body=body,
+        reason=reason,
+        should_emit_json=json_output or state.json_output,
+    )
 
 
-def run_noun_reopen(state: CliState, *, type_name: str, issue: str) -> None:
+def run_noun_reopen(
+    state: CliState,
+    *,
+    type_name: str,
+    issue: str,
+    json_output: bool = False,
+) -> None:
     num = parse_issue_number(issue)
     ctx_obj = state.context()
     warn_type_mismatch(ctx_obj, type_name, num, "reopen")
-    try:
-        gh_issue_reopen(ctx_obj.owner_repo, num)
-    except ZhApiError as exc:
-        error(str(exc))
-    success(f"Reopened #{num}")
+    reopen_issue_with_output(
+        ctx_obj,
+        num,
+        should_emit_json=json_output or state.json_output,
+    )
 
 
 def run_noun_delete(*, type_name: str, cmd_name: str) -> None:

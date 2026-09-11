@@ -77,7 +77,8 @@ For routine operations:
 2. Create the PR with `gh pr create` from the **implementation** repo. In the PR body include a non-closing cross-repo reference, e.g.:
    - `Tracked in QuoIntelligence/quollection#1044`
    - or the full `https://github.com/QuoIntelligence/quollection/issues/1044`
-   - Use `Closes owner/repo#N` only when that issue is meant to auto-close on **this** PR's merge and lives in a repo GitHub will resolve (same-repo `Closes #N` is safest when applicable). Multi-PR / multi-repo tickets → prefer `Tracked in`, not `Closes`.
+   - Use `Closes owner/repo#N` only when that issue is meant to auto-close on **this** PR's merge **into the repo default branch** and lives in a repo GitHub will resolve (same-repo `Closes #N` is safest when applicable). Multi-PR / multi-repo tickets → prefer `Tracked in`, not `Closes`.
+   - **Non-default base = no auto-close:** if the PR targets `develop`, a release branch, or any branch other than `defaultBranchRef` (common GitOps: env `develop` ≠ default `master`), GitHub keywords do **not** close the issue. After `gh pr merge`, always `zh close <N> -r completed -f /tmp/close.md --json` when the ticket must close.
 3. Notify the issue with PR URL(s) using one of:
 
    **A — Post after create (simplest):**
@@ -101,9 +102,14 @@ For routine operations:
 
 4. Return the PR URL(s) to the user.
 
-**Anti-patterns:** leaving `{{PLACEHOLDERS}}` unfilled; bare `#N` in a PR whose repo is not the issue's repo; `Closes #N` that would close the wrong same-repo issue or never touch the ZenHub ticket; using ellipsis `…` placeholders without a later `comment edit`.
+**Anti-patterns:** leaving `{{PLACEHOLDERS}}` unfilled; bare `#N` in a PR whose repo is not the issue's repo; `Closes #N` that would close the wrong same-repo issue or never touch the ZenHub ticket; assuming `Closes` fired after a merge into a non-default branch; using ellipsis `…` placeholders without a later `comment edit`.
 
-- **Close**: ALWAYS include a closing comment (draft + Hard Rule #6). Cite evidence (commit SHA, file:line, audit YAML pointer). Use `-r not planned` or `-r duplicate` when appropriate. Close itself remains propose-first under Hard Rule #2.
+- **Close**: ALWAYS include a closing comment (draft + Hard Rule #6). Cite evidence (commit SHA, file:line, audit YAML pointer, merged PR URL). Prefer agent form:
+  ```bash
+  zh close <N> -r completed -f /tmp/close.md --json
+  # optional confirm: zh issue <N> --json   # state CLOSED
+  ```
+  Use `-r not planned` or `-r duplicate` when appropriate. Positional comment only for already-approved one-liners. Close itself remains propose-first under Hard Rule #2. After merging a PR whose base ≠ default branch, close explicitly — do not rely on PR keywords.
 - **Move**: single ticket can fire directly (`zh move N "<Pipeline>" --json` — trust workspace-scoped `from`/`to`). Bulk moves (>3) → propose-first. Do not pre-scan every pipeline when the ticket number is known.
 - **Reorder**: numeric positions or `top`/`bottom`. Bulk reorders apply position 1 first, then 2, etc. — each call computes from current state.
 - **Assign**: free to fire directly.

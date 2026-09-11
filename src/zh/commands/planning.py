@@ -147,10 +147,24 @@ def _register_close(app: typer.Typer, type_name: str) -> None:
     def close_cmd(
         ctx: typer.Context,
         issue: Annotated[str, typer.Argument(help="Issue number")],
-        comment: Annotated[str | None, typer.Argument(help="Optional closing comment")] = None,
+        text: Annotated[str | None, typer.Argument(help="Optional closing comment (one-liner)")] = None,
         reason: Annotated[str, typer.Option("-r", "--reason")] = "completed",
+        message: Annotated[str | None, typer.Option("-m", "--message", help="Closing comment text")] = None,
+        body_file: Annotated[Path | None, typer.Option("-f", "--file", help="Read closing comment from file")] = None,
+        from_stdin: Annotated[bool, typer.Option("--stdin", help="Read closing comment from stdin")] = False,
+        json_output: Annotated[bool, typer.Option("--json", help="JSON on stdout")] = False,
     ) -> None:
-        run_noun_close(get_state(ctx), type_name=type_name, issue=issue, comment=comment, reason=reason)
+        run_noun_close(
+            get_state(ctx),
+            type_name=type_name,
+            issue=issue,
+            text=text,
+            reason=reason,
+            message=message,
+            body_file=body_file,
+            from_stdin=from_stdin,
+            json_output=json_output,
+        )
 
 
 def _register_reopen(app: typer.Typer, type_name: str) -> None:
@@ -158,8 +172,9 @@ def _register_reopen(app: typer.Typer, type_name: str) -> None:
     def reopen_cmd(
         ctx: typer.Context,
         issue: Annotated[str, typer.Argument(help="Issue number")],
+        json_output: Annotated[bool, typer.Option("--json", help="JSON on stdout")] = False,
     ) -> None:
-        run_noun_reopen(get_state(ctx), type_name=type_name, issue=issue)
+        run_noun_reopen(get_state(ctx), type_name=type_name, issue=issue, json_output=json_output)
 
 
 def _register_delete(app: typer.Typer, type_name: str, cmd_name: str) -> None:

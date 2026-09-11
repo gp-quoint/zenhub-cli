@@ -178,8 +178,8 @@ ZH_REST_TOKEN=your_rest_token_here
 | `comment <issue> [text]` | `c` | Add a comment (`$EDITOR` if no text); `comment edit <issue> [N]` edits **your** comment N |
 | `edit <issue> [opts]` | `e` | Edit title/description (`$EDITOR` by default; `-t`/`-d`/`-f` non-interactive) |
 | `attach <issue>` | | Open issue in browser to add attachments |
-| `close <issue> [comment]` | | Close an issue (`-r completed\|not planned\|duplicate`) |
-| `reopen <issue>` | | Reopen a closed issue |
+| `close <issue> [comment]` | | Close an issue (`-r completed\|not planned\|duplicate`; `-m`/`-f`/`--stdin`; `--json`) |
+| `reopen <issue>` | | Reopen a closed issue (`--json`) |
 | `delete <issue> [-y]` | | **Permanently delete** a GitHub issue (via `gh`; needs admin/triage). Prompts to confirm when interactive; `-y`/`--yes` skips. Prefer `close`. |
 | `create <title> [options]` | `new` | Create a new issue (`--json` / `-q` for machine output, `--parent` to nest) |
 | `block <issue> <blocker>` | `blocked-by`, `depends` | Set issue as blocked by another |
@@ -395,16 +395,20 @@ NEW=$(zh create "Quick task" -q)
 # Close an issue (moves to Closed pipeline in ZenHub)
 zh close 42
 
-# Close with a comment
+# Close with a one-line comment
 zh close 42 "Completed in PR #99"
+
+# Multi-line close note (agents: prefer -f / --stdin over embedding argv)
+zh close 42 -r completed -f /tmp/close.md --json
 
 # Close with a GitHub reason
 zh close 42 --reason completed
-zh close 42 --reason "not planned" -c "Out of scope for this quarter"
-zh close 42 --reason duplicate --duplicate-of 10
+zh close 42 --reason "not planned" -m "Out of scope for this quarter"
+zh close 42 -r duplicate -m "Duplicate of #10"
 
 # Reopen a closed issue
 zh reopen 42
+zh reopen 42 --json
 
 # PERMANENTLY delete a GitHub issue (DANGER — prefer `close`; needs
 # admin/triage permission). Deletes via `gh issue delete`, so the card
@@ -512,8 +516,8 @@ zh create "Token refresh endpoint" -t Feature --parent 42 --json
 | `update <issue#> [opts]` | Edit title and/or body. Options: `-t`, `-d`. Aliases: `edit`, `modify` |
 | `add <parent#> <issue#>...` | Attach sub-issues (single API call) |
 | `remove <parent#> <issue#>...` | Detach sub-issues |
-| `close <issue#> [comment]` | Close the issue |
-| `reopen <issue#>` | Reopen the issue |
+| `close <issue#> [comment] [-m|-f|--stdin] [-r reason] [--json]` | Close the issue |
+| `reopen <issue#> [--json]` | Reopen the issue |
 
 To delete an epic, delete the issue: `zh delete <issue#>` (DANGER, prefer `close`).
 
