@@ -147,7 +147,7 @@ def move_issue(ctx: RepoContext, issue_number: int, pipeline_name: str) -> MoveR
     if not new_name:
         raise ZhApiError("Failed to move issue")
     return {
-        "number": str(issue_number),
+        "number": issue_number,
         "title": str(issue.get("title") or ""),
         "from_pipeline": from_pipeline,
         "to_pipeline": str(new_name),
@@ -242,7 +242,8 @@ def _apply_create_followups(
         "github_url": gh_url,
         "zenhub_url": zh_url,
         "title": title,
-        "type": issue_type,
+        "issue_type": issue_type,
+        "type": issue_type,  # deprecated alias of issue_type
         "pipeline": pipeline_set,
         "estimate": estimate_applied,
         "estimate_requested": float(estimate) if estimate else None,

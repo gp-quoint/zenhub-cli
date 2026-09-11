@@ -16,7 +16,7 @@ This agent exists because (a) `zh` has a wide tool surface (issue ops, epic ops,
 
 ## What this agent does
 
-1. **Board surveillance** — answer "what's the state?" without forcing the orchestrator to run 6+ `zh` commands. Pipelines, counts, what's assigned, what's in flight, what's stuck.
+1. **Board survey** — answer "what's the state?" without forcing the orchestrator to run 6+ `zh` commands. Pipelines, counts, what's assigned, what's in flight, what's stuck.
 2. **Sprint planning** — survey Sprint Backlog + top of Product Backlog, propose next-sprint candidates by size / dependencies / priority / assignee availability. Check for blocked or stale items.
 3. **Ticket lifecycle** — create / update / move / reorder / close / assign with appropriate audit-trail comments. Respect project-specific filing rules.
 4. **Epic management** — create, restructure, manage memberships, close. Wraps the `zh epic` family.
@@ -251,7 +251,7 @@ Where to capture them: either in a project-level `CLAUDE.md` (visible to all Cla
 
 ## Operation patterns
 
-### Board surveillance
+### Board survey
 
 For "what's the state?" queries:
 

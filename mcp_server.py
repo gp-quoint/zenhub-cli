@@ -1135,6 +1135,7 @@ def _finalize_create_from_zh(
                 "url": None,
                 "github_url": None,
                 "zenhub_url": None,
+                "issue_type": None,
                 "type": None,
                 "pipeline": None,
                 "parent": None,
@@ -1157,6 +1158,7 @@ def _finalize_create_from_zh(
     )
     gh_url = (created.get("github_url") or created.get("url")) if created else None
     zh_url = created.get("zenhub_url") if created else None
+    issue_type = (created.get("issue_type") or created.get("type")) if created else None
     return {
         "ok": r["ok"] and created is not None,
         "partial_applied": parent_wire_failed,
@@ -1164,7 +1166,8 @@ def _finalize_create_from_zh(
         "url": gh_url,
         "github_url": gh_url,
         "zenhub_url": zh_url,
-        "type": created.get("type") if created else None,
+        "issue_type": issue_type,
+        "type": issue_type,  # deprecated alias of issue_type
         "pipeline": created.get("pipeline") if created else None,
         "parent": created.get("parent") if created else None,
         "estimate": created.get("estimate") if created else None,
@@ -1563,6 +1566,7 @@ def create_issue(title: str, body: str, type: str = "Task",
         "url": None,
         "github_url": None,
         "zenhub_url": None,
+        "issue_type": None,
         "type": None,
         "pipeline": None,
         "parent": None,
@@ -2063,6 +2067,7 @@ def _planning_create(noun: str, title: str, description: str, labels: str,
             "url": None,
             "github_url": None,
             "zenhub_url": None,
+            "issue_type": None,
             "type": None,
             "pipeline": None,
             "parent": None,

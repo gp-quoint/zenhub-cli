@@ -58,52 +58,35 @@ zh workspaces; zh pipelines; zh pipeline "…"   # fan-out just to find one tick
 
 ## CLI invocation (Typer)
 
+Full flags, `--json` shapes, aliases, and install notes: **[cli-reference.md](cli-reference.md)**. Do not ritual `zh <cmd> --help` when the skill/reference already documents the command.
+
 ```bash
-zh -r owner/repo -w "Team" board   # global flags before subcommand
-zh edit 36 -t "New title" -f body.md   # title and/or body; then zh issue 36 --json
-zh close 41 -r completed -f /tmp/close.md --json   # multi-line close note; then optional zh issue 41 --json
-zh unblock 1047 1044 --json   # remove blockage edge; Related stays prose in body
-zh block 1047 1044 --json     # set blockage: 1047 blocked BY 1044
-# zh create --help           # ONLY after a real miss / unknown flag — NOT `zh help create`
-# zh --help                  # only when exploring an unfamiliar command family
+zh -r owner/repo -w "Team" board
+zh edit 36 -t "New title" -f body.md          # then zh issue 36 --json (edit has no --json)
+zh close 41 -r completed -f /tmp/close.md --json
+zh unblock 1047 1044 --json                   # Related stays prose; needs ZH_REST_TOKEN
+zh move 42 "In Progress" --json               # trust workspace-scoped from/to
 ```
 
-- **Body input:** prefer `-f <file>` (works after the issue number: `zh comment 42 -f notes.md`, `zh close 41 -f close.md`). Also `--stdin`; create/edit use `-b`/`-d`; **comment add**, **comment edit**, and **close** accept `-m` / `-f` / `--stdin`. Bare `zh comment <N>` / `zh edit <N>` / `zh comment edit <N>` opens `$EDITOR` — avoid in non-interactive agent sessions unless intentional.
-- **`zh comment edit` body flags (zh ≥ 1.12):** `-m` / `-f` / `--stdin` replace the whole comment; `--fill KEY=value` (repeatable) replaces `{{KEY}}` in the existing body (or in the `-m`/`-f`/`--stdin` body). Prefer `--fill` for deferred PR URL fill after `gh pr create`.
-- **Comment edit index is 1-based:** `zh comment edit <N> <index>` uses **1..len(comments)**. Take `comments[].index` from `zh issue <N> --json`. Do **not** use jq `to_entries[].key` (0-based) or Python `enumerate` without `+1`. Index `0` is always invalid.
-- **No `zh pr` / `zh link`:** linking PRs to issues is GitHub + a comment — see [operation-patterns.md](operation-patterns.md)#link-prs-to-zenhub-issues. Create PRs with `gh pr create`, then notify or fill the issue comment with final URLs. After `gh pr merge`, see **non-default-branch auto-close** below — do not assume `Closes #N` closed the ticket.
-- **Machine output:** `--json` on stdout (human info on stderr) where supported; `-q` emits only the new issue number on create. Prefer `--json` on writes agents must verify (`zh move … --json`, `zh sprint add … --json`, `zh comment edit … --json`, `zh close … --json`, `zh reopen … --json`, `zh block … --json`, `zh unblock … --json`). **`zh edit` has no `--json`** — apply with `-f`/`-t`/`-d`, then verify via `zh issue <N> --json`. Do **not** invent `--json` on commands the skill does not document; after a Typer "unexpected option" error, check skill docs / `--help` once.
-- **Close (agent):** `zh close <N> -r completed -f /tmp/close.md --json` → `{ok, number, title, state, reason, comment_added, pipeline?}`. Positional comment is fine for one-liners only. After merge into a non-default branch, always close explicitly (see Hard Rule #1).
-- **Dependencies:** `zh block <blocked> <blocking> [--json]` → `{ok, blocked, blocked_title, blocking, blocking_title}`. `zh unblock <blocked> <blocking> [--json]` → `{ok, blocked, blocking, removed}` — requires `ZH_REST_TOKEN` (GraphQL cannot remove deps). There is **no** ZenHub "related" edge API; related stays body prose (`Related: #N`). Verify edges via `zh issue <N> --json` → `issue.blocked_by` / `issue.blocking`.
-- **Nested subcommands:** `zh sprint add current 42`, `zh comment edit 42 [index]`, `zh epic create "Title"`. Comment add is the default: `zh comment 42 …` ≡ `zh comment add 42 …`. Sprint show defaults similarly: `zh sprint` / `zh sprint current` ≡ `zh sprint show current`.
-- **Sprint membership:** `zh sprint add current 42` and `zh sa current 42` both work. Prefer the explicit form in scripts.
-- **Pipeline moves:** `zh move 42 "In Progress"` or unique prefix/substring (`zh move 42 progress`). `--json` returns `{ok, number, title, from, to}` with the **workspace-scoped** prior/new pipeline. Mutations invalidate GraphQL read caches (in-process + on-disk gen), so a follow-up `zh pipeline` / `zh sprint` sees fresh state without `ZH_GRAPHQL_CACHE_FORCE=1`.
-- **`zh c` vs `zh comment`:** `c` is add-only (no `edit` subcommand). Use `zh comment edit …` for edits.
-- **`zh issue <N> [--json]`:** GitHub body/comments **plus** workspace-scoped `pipeline`, `estimate`, `priority`, `zenhub_url`, `workspace_id`, **`blocked_by`**, **`blocking`**. Each dependency row is `{number, title, state?}`. Each comment includes **`index`** (1-based) for `zh comment edit`. Prefer this over pipeline fan-out when locating one ticket.
-- **Sandbox / GraphQL cache:** L2 lives under `~/.cache/zh/graphql`. If that path is not writable (Cursor workspace sandbox), zh falls back to in-process L1 and continues. For full L2 under sandbox, add `~/.cache/zh` to `~/.cursor/sandbox.json` → `additionalReadwritePaths` (and `~/.cache/huggingface` for `zh similar`).
+Agent-critical reminders (detail in cli-reference):
+
+- Prefer `--json` on writes you must verify (`move`, `close`/`reopen`, `block`/`unblock`, `sprint add`, `comment edit`). **Do not invent `--json`** on undocumented commands.
+- Body input: prefer `-f` / `--stdin`; bare `comment`/`edit`/`comment edit` opens `$EDITOR`.
+- Comment edit index is **1-based** (`comments[].index` from `zh issue --json`).
+- `zh issue <N> --json` includes `pipeline`, `blocked_by`, `blocking`, URLs; prefer over pipeline fan-out.
+- No `zh pr` / `zh link` — see [operation-patterns.md](operation-patterns.md)#link-prs-to-zenhub-issues. After merge to a non-default branch, close explicitly (Hard Rule #1).
 
 ## CLI setup
 
-`zh` is a uv-managed Python CLI installed as an editable **uv tool** (`uv tool install --editable <checkout>`). The console entry point (`zh` → `zh.cli.main:run`) lives under `~/.local/bin` via the uv tools bin dir — do **not** symlink the repo's bash `zh` launcher or invoke via `uv run`.
+`zh` is a uv-managed Python CLI installed as an editable **uv tool** (`uv tool install --editable --force ~/dev/github/gp-quoint/zenhub-cli`). Entry point: `zh` → `zh.cli.main:run` under `~/.local/bin`. Config: `~/.config/zh/config` (`ZH_TOKEN`; `ZH_REST_TOKEN` for unblock). Details: [cli-reference.md](cli-reference.md)#setup--config.
 
-| Requirement | Notes |
-|---|---|
-| **uv** | Required to install/update `zh` (`brew install uv` or [docs.astral.sh/uv](https://docs.astral.sh/uv/)) |
-| **Python 3.13+** | Managed by the uv tool environment |
-| **gh, jq, git** | Same as before — GitHub auth via `gh auth status` |
-| **~/.config/zh/config** | `ZH_TOKEN` (GraphQL); optional `ZH_REST_TOKEN`, `ZH_REPO`, `ZH_WORKSPACE` |
+**Similarity** (`zh similar`, create pre-flight) ships with the install (sentence-transformers + torch; model under `~/.cache/huggingface/`). Agents should **not** run `zh version` every turn — see Lean session bootstrap.
 
-Install (dotfiles): `install/uv-tools` editable-installs `~/dev/github/gp-quoint/zenhub-cli` when present. Manual: `uv tool install --editable --force ~/dev/github/gp-quoint/zenhub-cli`.
-
-**Similarity search** (`zh similar`, built-in duplicate pre-flight on `zh create` / planning creates) is a core dependency — the editable tool install pulls in `sentence-transformers` (+ torch). First embedding load also caches the model under `~/.cache/huggingface/` (~80MB).
-
-**Version:** VCS-derived (`hatch-vcs`); do not expect a static string in `pyproject.toml`. Agents should **not** run `zh version` every turn — see Lean session bootstrap. Human install verify (once): `zh version`, `zh similar "login bug" --json`. Check version only after a real capability miss (`comment edit --fill`, workspace-scoped move/`issue` pipeline fields, etc.).
-
-`zh` has a wide command surface (issue ops, epic ops, sprint ops, board surveys) and each project has its own filing conventions, so recurring tasks (sprint planning, grooming, batch cleanups) benefit from a consistent playbook rather than being re-derived every session.
+`zh` has a wide command surface and each project has its own filing conventions, so recurring tasks benefit from a consistent playbook rather than being re-derived every session.
 
 ## What this covers
 
-1. **Board surveillance** — answer "what's the state?" without running 6+ raw `zh` commands. Pipelines, counts, what's assigned, what's in flight, what's stuck.
+1. **Board survey** — answer "what's the state?" without running 6+ raw `zh` commands. Pipelines, counts, what's assigned, what's in flight, what's stuck.
 2. **Sprint planning** — survey Sprint Backlog + top of Product Backlog, propose next-sprint candidates by size / dependencies / priority / assignee availability. Check for blocked or stale items.
 3. **Ticket lifecycle** — create / update / move / reorder / close / assign with appropriate audit-trail comments. Respect project-specific filing rules.
 4. **Epic management** — create, restructure, manage memberships, close. Wraps the `zh epic` family.
@@ -122,7 +105,7 @@ Install (dotfiles): `install/uv-tools` editable-installs `~/dev/github/gp-quoint
 ## Reference files
 
 - [cli-reference.md](cli-reference.md) — full `zh` command surface (read/write ops, aliases, repo/workspace targeting, similarity search). Read before any non-trivial operation to confirm the exact flags/aliases. Prefer `zh --help` / `zh <command> --help` when unsure — the installed binary is authoritative.
-- [operation-patterns.md](operation-patterns.md) — concrete workflows: board surveillance, sprint planning, ticket/epic/sub-issue lifecycle, batch "wave" pattern, structured-plan bulk-load with `depends_on` forwarding, sprint metadata.
+- [operation-patterns.md](operation-patterns.md) — concrete workflows: board survey, sprint planning, ticket/epic/sub-issue lifecycle, batch "wave" pattern, structured-plan bulk-load with `depends_on` forwarding, sprint metadata.
 - [issue-templates.md](issue-templates.md) — concise Issue / Task / Bug body templates (default when drafting).
 - [scripts/zh-draft-zed.sh](scripts/zh-draft-zed.sh) — Hard Rule #6 helper: open a draft in Zed (`-w`), wait for edits, print the path for `zh … -f`.
 

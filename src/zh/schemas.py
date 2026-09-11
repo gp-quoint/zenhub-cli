@@ -69,7 +69,9 @@ class WrongParentChild(TypedDict):
     actual_parent: int | None
 
 
-class MutationResult(TypedDict, total=False):
+class SubIssueMutationResult(TypedDict, total=False):
+    """Outcome of add/remove/reorder sub-issue mutations."""
+
     ok: bool
     parent_number: int
     child_number: int
@@ -85,11 +87,30 @@ class MutationResult(TypedDict, total=False):
     partial_success_warning: str | None
     error: str | None
     message: str | None
-    sprint_id: str
+
+
+class SprintMembershipResult(TypedDict, total=False):
+    """Outcome of add/remove sprint membership mutations."""
+
+    ok: bool
+    sprint_id: str | None
     sprint_name: str
+    outcome: Outcome
+    success_count: int
+    failed_count: int
+    succeeded: list[int]
+    failed: list[FailedIssueRef | int]
+    unaccounted: list[int]
     inspected_full: bool
     pagination_warning: str | None
     response_anomaly: str | None
+    partial_success_warning: str | None
+    error: str | None
+    message: str | None
+
+
+# Union kept for call sites that accept either batch shape.
+MutationResult = SubIssueMutationResult | SprintMembershipResult
 
 
 class DuplicateMatch(TypedDict, total=False):
@@ -229,7 +250,8 @@ class CreateIssueResult(TypedDict):
     url: NotRequired[str | None]  # GitHub HTML URL (alias of github_url)
     github_url: NotRequired[str | None]
     zenhub_url: NotRequired[str | None]
-    type: NotRequired[str | None]
+    issue_type: NotRequired[str | None]
+    type: NotRequired[str | None]  # deprecated alias of issue_type (JSON back-compat)
     pipeline: NotRequired[str | None]
     estimate: NotRequired[float | None]
     estimate_requested: NotRequired[float | None]
@@ -253,7 +275,7 @@ class AssignResult(TypedDict):
 
 
 class MoveResult(TypedDict):
-    number: str
+    number: int
     title: str
     from_pipeline: str
     to_pipeline: str

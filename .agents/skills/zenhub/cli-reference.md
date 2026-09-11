@@ -153,7 +153,7 @@ Precedence: **flag > env / config > git-remote + first-workspace fallback**. Use
 -q, --quiet          Emit only the new issue number
 ```
 
-**`--json` success shape:** `ok`, `number`, `url` (GitHub), `github_url`, `zenhub_url`, `title`, `type`, `pipeline`, `estimate`, `parent`, `priority`, `priority_requested`, `duplicate_check`, optionally `partial_applied`.
+**`--json` success shape:** `ok`, `number`, `url` (GitHub), `github_url`, `zenhub_url`, `title`, `issue_type` (and deprecated alias `type`), `pipeline`, `estimate`, `parent`, `priority`, `priority_requested`, `duplicate_check`, optionally `partial_applied`.
 
 Human create output prints both links after the success line:
 

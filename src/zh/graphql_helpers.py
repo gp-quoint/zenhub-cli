@@ -9,10 +9,10 @@ from zh.json_helpers import as_dict, dict_nodes, json_int
 from zh.schemas import (
     CrossRepoChild,
     FailedIssueRef,
-    MutationResult,
     Outcome,
     SprintIssueRow,
     SubIssueChild,
+    SubIssueMutationResult,
     WrongParentChild,
 )
 from zh.types import JsonDict
@@ -124,7 +124,7 @@ def finalize_child_mutation_payload(
     parent_number: int,
     payload: JsonDict,
     classify_outcome: Callable[[int, int], Outcome],
-) -> MutationResult:
+) -> SubIssueMutationResult:
     success_count = json_int(payload.get("successCount"))
     failed_raw = payload.get("failedIssues")
     failed_issues: list[object] = cast(list[object], failed_raw) if isinstance(failed_raw, list) else []
@@ -158,7 +158,7 @@ def finalize_child_mutation_payload(
     )
 
     return cast(
-        MutationResult,
+        SubIssueMutationResult,
         {
             "ok": outcome == "ok",
             "parent_number": parent_number,
@@ -281,7 +281,7 @@ def remove_subissue_preflight_failure_payload(
     not_found: list[int],
     cross_repo: list[CrossRepoChild],
     wrong_parent: list[WrongParentChild],
-) -> MutationResult:
+) -> SubIssueMutationResult:
     mismatch_numbers = set(not_found) | {c["number"] for c in cross_repo} | {w["number"] for w in wrong_parent}
     failed: list[FailedIssueRef | int] = [
         *[{"number": n, "owner": "", "name": ""} for n in not_found],

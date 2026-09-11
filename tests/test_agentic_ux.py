@@ -122,7 +122,7 @@ def test_move_issue_reports_real_from_pipeline(monkeypatch: pytest.MonkeyPatch) 
     result = move_issue(ctx, 42, "In Progress")
     assert result["from_pipeline"] == "Blocked"
     assert result["to_pipeline"] == "In Progress"
-    assert result["number"] == "42"
+    assert result["number"] == 42
 
 
 def test_issue_zenhub_summary_prefers_workspace_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -337,7 +337,7 @@ def test_move_cmd_json(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(
         "zh.commands.issues.move_issue",
         lambda _ctx, _num, _pipe: {
-            "number": "42",
+            "number": 42,
             "title": "Libs",
             "from_pipeline": "New Issues",
             "to_pipeline": "In Progress",

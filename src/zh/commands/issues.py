@@ -181,7 +181,7 @@ def move_cmd(
         emit_json(
             {
                 "ok": True,
-                "number": int(result["number"]),
+                "number": result["number"],
                 "title": result["title"],
                 "from": result["from_pipeline"],
                 "to": result["to_pipeline"],

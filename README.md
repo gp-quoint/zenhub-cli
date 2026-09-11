@@ -362,9 +362,10 @@ EOF
 # Machine-readable output for batch / agent callers (clean JSON on stdout,
 # human chatter goes to stderr)
 zh create "Auth service" -t Epic --json
-# {"number":42,"url":"https://github.com/o/r/issues/42","title":"Auth service",
-#  "type":"Epic","pipeline":null,"estimate":null,"estimate_requested":null,
+# {"ok":true,"number":42,"url":"https://github.com/o/r/issues/42","title":"Auth service",
+#  "issue_type":"Epic","type":"Epic","pipeline":null,"estimate":null,"estimate_requested":null,
 #  "parent":null,"priority":null,"priority_requested":null}
+# (`type` is a deprecated alias of `issue_type`)
 #
 # v1.9.1: `priority_requested` mirrors the user's --priority value
 # regardless of whether the post-create mutation confirmed it. Compare to

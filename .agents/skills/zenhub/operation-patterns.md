@@ -4,7 +4,7 @@ All operations use **shell `zh …`**. See [cli-reference.md](cli-reference.md) 
 
 ---
 
-## Board surveillance
+## Board survey
 
 For "what's the state?" queries:
 

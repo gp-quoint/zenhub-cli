@@ -26,7 +26,8 @@ from zh.json_helpers import as_dict, data_get, dict_nodes
 from zh.operations import op
 from zh.schemas import (
     IssueInfo,
-    MutationResult,
+    SprintMembershipResult,
+    SubIssueMutationResult,
     SprintDetailResult,
     SprintListResult,
     SprintRow,
@@ -177,7 +178,7 @@ def _classify_outcome(success_count: int, failed_count: int) -> str:
     return "ok"
 
 
-def add_sub_issues(ctx: RepoContext, parent_number: int, child_numbers: list[int]) -> MutationResult:
+def add_sub_issues(ctx: RepoContext, parent_number: int, child_numbers: list[int]) -> SubIssueMutationResult:
     """Link children under parent; wrong-parent rejects surface in failedIssues."""
     if not child_numbers:
         raise ZhApiError("child_numbers must be non-empty")
@@ -248,7 +249,7 @@ def _validate_remove_sub_issues_children(
     ctx: RepoContext,
     parent_number: int,
     child_numbers: list[int],
-) -> tuple[MutationResult | None, str | None, list[dict]]:
+) -> tuple[SubIssueMutationResult | None, str | None, list[dict]]:
     parent_issue = get_issue_by_info(ctx, parent_number)
     if not parent_issue:
         return (
@@ -317,7 +318,7 @@ def _validate_remove_sub_issues_children(
     return None, parent_issue["id"], resolved
 
 
-def remove_sub_issues(ctx: RepoContext, parent_number: int, child_numbers: list[int]) -> MutationResult:
+def remove_sub_issues(ctx: RepoContext, parent_number: int, child_numbers: list[int]) -> SubIssueMutationResult:
     """Unlink each child from its parent.
 
     The API's `removeSubIssues` only takes child IDs — it unlinks each
@@ -370,7 +371,7 @@ def _reorder_sub_issue_result(
     position: str,
     outcome: str,
     error: str | None,
-) -> MutationResult:
+) -> SubIssueMutationResult:
     return {
         "ok": ok,
         "child_number": child_number,
@@ -418,7 +419,7 @@ def _resolve_top_bottom_reorder_anchor(
     child_id: str,
     child_number: int,
     parent_number: int,
-) -> tuple[str | None, str | None, str, MutationResult | None]:
+) -> tuple[str | None, str | None, str, SubIssueMutationResult | None]:
     if pos == "top":
         other = next(
             (s for s in siblings if s.get("id") and s.get("id") != child_id),
@@ -470,7 +471,7 @@ def _resolve_relative_reorder_anchor(
     sibling_number: int | None,
     child_number: int,
     parent_number: int,
-) -> tuple[str | None, str | None, str, MutationResult | None]:
+) -> tuple[str | None, str | None, str, SubIssueMutationResult | None]:
     position_desc = f"{pos} #{sibling_number}"
     sib_id = _find_sibling_id_by_number_in_repo(siblings, sibling_number, ctx.owner_repo)
     if not sib_id:
@@ -501,7 +502,7 @@ def _resolve_reorder_anchors(
     child_number: int,
     parent_number: int,
     sibling_number: int | None,
-) -> tuple[str | None, str | None, str, MutationResult | None]:
+) -> tuple[str | None, str | None, str, SubIssueMutationResult | None]:
     if pos in {"top", "bottom"}:
         after_id, before_id, position_desc, error = _resolve_top_bottom_reorder_anchor(
             pos=pos,
@@ -544,7 +545,7 @@ def _resolve_reorder_child_context(
     ctx: RepoContext,
     child_number: int,
     pos: str,
-) -> tuple[MutationResult | None, int, str, str]:
+) -> tuple[SubIssueMutationResult | None, int, str, str]:
     child_issue = get_issue_by_info(ctx, child_number)
     if not child_issue:
         return (
@@ -584,7 +585,7 @@ def _load_reorder_siblings(
     parent_number: int,
     child_number: int,
     pos: str,
-) -> tuple[MutationResult | None, list[SubIssueChild]]:
+) -> tuple[SubIssueMutationResult | None, list[SubIssueChild]]:
     sibling_listing = list_sub_issues(ctx, parent_number)
     if not sibling_listing.get("ok"):
         return (
@@ -631,7 +632,7 @@ def _execute_reorder_sub_issue_mutation(
     child_number: int,
     parent_number: int,
     position_desc: str,
-) -> MutationResult:
+) -> SubIssueMutationResult:
     data = ctx.execute(
         _REPRIORITIZE_SUB_ISSUE_MUTATION,
         {
@@ -674,7 +675,7 @@ def reorder_sub_issue(
     child_number: int,
     position: str,
     sibling_number: int | None = None,
-) -> MutationResult:
+) -> SubIssueMutationResult:
     """Reorder a sub-issue among its parent's children.
 
     Position keywords:
@@ -1145,7 +1146,7 @@ def _sprint_removal_walk_error_result(
     issue_numbers: list[int],
     response_anomaly: str | None,
     error: str,
-) -> MutationResult:
+) -> SprintMembershipResult:
     return {
         "ok": False,
         "sprint_id": sprint_id,
@@ -1233,7 +1234,7 @@ def _compute_sprint_removal_outcome(
     return succeeded, failed, outcome, unaccounted, response_anomaly
 
 
-def add_issues_to_sprint(ctx: RepoContext, sprint_name: str, issue_numbers: list[int]) -> MutationResult:
+def add_issues_to_sprint(ctx: RepoContext, sprint_name: str, issue_numbers: list[int]) -> SprintMembershipResult:
     """Add issues; missing sprintIssues links count as failed."""
     if not issue_numbers:
         raise ZhApiError("issue_numbers must be non-empty")
@@ -1313,7 +1314,7 @@ def add_issues_to_sprint(ctx: RepoContext, sprint_name: str, issue_numbers: list
     }
 
 
-def remove_issues_from_sprint(ctx: RepoContext, sprint_name: str, issue_numbers: list[int]) -> MutationResult:
+def remove_issues_from_sprint(ctx: RepoContext, sprint_name: str, issue_numbers: list[int]) -> SprintMembershipResult:
     """Remove issues; infer failures from post-mutation sprint membership.
 
     When ``inspected_full`` is False (walker bailed), only inputs in
