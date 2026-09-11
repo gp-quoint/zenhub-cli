@@ -77,7 +77,10 @@ def register(app: typer.Typer) -> None:
     app.command("e", hidden=True)(edit_cmd)
     app.command("attach", help="Open issue in browser for file attachments")(attach_cmd)
     app.command("block", help="Set dependency: blocked is blocked by blocker")(block_cmd)
-    app.command("unblock", help="Remove dependency (requires ZH_REST_TOKEN)")(unblock_cmd)
+    app.command(
+        "unblock",
+        help="Remove dependency (requires ZH_REST_TOKEN; GraphQL cannot remove deps)",
+    )(unblock_cmd)
     app.command("close", help="Close an issue")(close_cmd)
     app.command("reopen", help="Reopen a closed issue")(reopen_cmd)
     app.command("delete", help="Permanently delete a GitHub issue (danger)")(delete_cmd)
@@ -98,6 +101,8 @@ def issue_cmd(
         subs = list_sub_issues(ctx_obj, num)
     except ZhApiError as exc:
         error(str(exc))
+    blocked_by = zh.get("blocked_by") or []
+    blocking = zh.get("blocking") or []
     merged = {
         **data,
         "pipeline": zh.get("pipeline"),
@@ -105,6 +110,8 @@ def issue_cmd(
         "priority": zh.get("priority"),
         "zenhub_url": zh.get("zenhub_url"),
         "workspace_id": zh.get("workspace_id"),
+        "blocked_by": blocked_by,
+        "blocking": blocking,
     }
     comments = annotate_comment_indices(data.get("comments"))
     merged["comments"] = comments
@@ -118,6 +125,10 @@ def issue_cmd(
     est_s = str(est) if est is not None else "-"
     prio = zh.get("priority") or "-"
     print_line(f"\nState: {data.get('state')}  Pipeline: {pipe}  Estimate: {est_s}  Priority: {prio}")
+    if isinstance(blocked_by, list) and blocked_by:
+        print_line(f"Blocked by: {_format_dep_list(blocked_by)}")
+    if isinstance(blocking, list) and blocking:
+        print_line(f"Blocking: {_format_dep_list(blocking)}")
     print_line(f"GitHub: {data.get('url')}")
     if zh.get("zenhub_url"):
         print_line(f"ZenHub: {zh.get('zenhub_url')}")
@@ -134,6 +145,23 @@ def issue_cmd(
             author = comment.get("author")
             login = author.get("login") if isinstance(author, dict) else comment.get("user") or "?"
             print_line(f"  [{comment.get('index')}] @{login}")
+
+
+def _format_dep_list(rows: list[object]) -> str:
+    parts: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        number = row.get("number")
+        title = row.get("title") or ""
+        state = row.get("state")
+        label = f"#{number}"
+        if title:
+            label = f"{label} {title}"
+        if state:
+            label = f"{label} ({state})"
+        parts.append(label)
+    return "; ".join(parts) if parts else "-"
 
 
 def move_cmd(
@@ -442,6 +470,7 @@ def block_cmd(
     ctx: typer.Context,
     blocked: Annotated[str, typer.Argument(help="Blocked issue number")],
     blocking: Annotated[str, typer.Argument(help="Blocking issue number")],
+    json_output: Annotated[bool, typer.Option("--json", help="JSON on stdout")] = False,
 ) -> None:
     """Set dependency: blocked is blocked by blocking."""
     state = get_state(ctx)
@@ -449,6 +478,17 @@ def block_cmd(
         result = create_blockage(state.context(), parse_issue_number(blocked), parse_issue_number(blocking))
     except ZhApiError as exc:
         error(str(exc))
+    if json_output or state.json_output:
+        emit_json(
+            {
+                "ok": True,
+                "blocked": int(result["blocked"]),
+                "blocked_title": result["blocked_title"],
+                "blocking": int(result["blocking"]),
+                "blocking_title": result["blocking_title"],
+            }
+        )
+        return
     success("Created dependency")
     print_line(f"  #{result['blocked']} ({result['blocked_title']})")
     print_line("  is blocked by")
@@ -459,14 +499,27 @@ def unblock_cmd(
     ctx: typer.Context,
     blocked: Annotated[str, typer.Argument(help="Blocked issue number")],
     blocking: Annotated[str, typer.Argument(help="Blocking issue number")],
+    json_output: Annotated[bool, typer.Option("--json", help="JSON on stdout")] = False,
 ) -> None:
-    """Remove dependency (requires ZH_REST_TOKEN)."""
+    """Remove dependency via ZenHub REST API (requires ZH_REST_TOKEN; GraphQL cannot remove deps)."""
     state = get_state(ctx)
     try:
-        remove_blockage(state.context().owner_repo, blocked, blocking)
+        result = remove_blockage(state.context().owner_repo, blocked, blocking)
     except ZhApiError as exc:
         error(str(exc))
-    success(f"Removed dependency: #{parse_issue_number(blocked)} is no longer blocked by #{parse_issue_number(blocking)}")
+    if json_output or state.json_output:
+        emit_json(
+            {
+                "ok": True,
+                "blocked": result["blocked"],
+                "blocking": result["blocking"],
+                "removed": result["removed"],
+            }
+        )
+        return
+    success(
+        f"Removed dependency: #{result['blocked']} is no longer blocked by #{result['blocking']}"
+    )
 
 
 def close_cmd(

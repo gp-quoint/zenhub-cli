@@ -272,6 +272,12 @@ class BlockageResult(TypedDict):
     blocking_title: str
 
 
+class UnblockResult(TypedDict):
+    blocked: int
+    blocking: int
+    removed: bool
+
+
 class PlanningListItem(TypedDict, total=False):
     number: int
     title: str

@@ -52,8 +52,8 @@ zh create "Title" -t Feature --parent 42 -q   # Nest under #42; emit only the ne
 zh type <issue> <name>                        # Change an existing issue's type
 
 # Dependencies
-zh block <blocked> <blocker>  # Set dependency
-zh unblock <blocked> <blocker> # Remove dependency
+zh block <blocked> <blocker> [--json]  # Set dependency
+zh unblock <blocked> <blocker> [--json] # Remove dependency (needs ZH_REST_TOKEN)
 
 # Priorities (workspace-defined, resolved by name)
 zh priorities                 # List the workspace's configured priorities

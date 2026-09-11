@@ -146,6 +146,12 @@ def test_issue_zenhub_summary_prefers_workspace_pipeline(monkeypatch: pytest.Mon
                     "pipelineIssues": {
                         "nodes": [{"pipeline": {"id": "p-n", "name": "New Issues", "issues": {"totalCount": 9}}}]
                     },
+                    "blockingIssues": {
+                        "nodes": [{"number": 41, "title": "API", "state": "CLOSED"}],
+                    },
+                    "blockedIssues": {
+                        "nodes": [{"number": 50, "title": "UI", "state": "OPEN"}],
+                    },
                 }
             }
         }
@@ -157,6 +163,8 @@ def test_issue_zenhub_summary_prefers_workspace_pipeline(monkeypatch: pytest.Mon
     assert summary["priority"] == "High"
     assert summary["workspace_id"] == ctx.workspace_id
     assert "zenhub_url" in summary
+    assert summary["blocked_by"] == [{"number": 41, "title": "API", "state": "CLOSED"}]
+    assert summary["blocking"] == [{"number": 50, "title": "UI", "state": "OPEN"}]
 
 
 def test_issue_cmd_json_includes_pipeline(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -179,6 +187,8 @@ def test_issue_cmd_json_includes_pipeline(runner: CliRunner, monkeypatch: pytest
             "priority": "High",
             "zenhub_url": "https://app.zenhub.com/workspaces/ws/issues/gh/acme/widgets/42",
             "workspace_id": "ws-gid-backend",
+            "blocked_by": [{"number": 41, "title": "API", "state": "CLOSED"}],
+            "blocking": [],
         },
     )
     monkeypatch.setattr(
@@ -190,7 +200,135 @@ def test_issue_cmd_json_includes_pipeline(runner: CliRunner, monkeypatch: pytest
     assert '"pipeline": "Blocked"' in result.output
     assert '"estimate": 8.0' in result.output
     assert '"zenhub_url"' in result.output
+    assert '"blocked_by"' in result.output
+    assert '"number": 41' in result.output
 
+
+def test_issue_cmd_human_shows_blockers(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("zh.cli.state.resolve_context", lambda **_: make_ctx())
+    monkeypatch.setattr(
+        "zh.commands.issues.gh_issue_view",
+        lambda *_a, **_k: {
+            "title": "Libs",
+            "body": "body",
+            "state": "OPEN",
+            "url": "https://github.com/acme/widgets/issues/42",
+            "comments": [],
+        },
+    )
+    monkeypatch.setattr(
+        "zh.commands.issues.issue_zenhub_summary",
+        lambda *_a, **_k: {
+            "pipeline": "Blocked",
+            "estimate": None,
+            "priority": None,
+            "zenhub_url": None,
+            "workspace_id": "ws-gid-backend",
+            "blocked_by": [{"number": 41, "title": "API", "state": "CLOSED"}],
+            "blocking": [{"number": 50, "title": "UI", "state": "OPEN"}],
+        },
+    )
+    monkeypatch.setattr(
+        "zh.commands.issues.list_sub_issues",
+        lambda *_a, **_k: {"children": []},
+    )
+    result = runner.invoke(app, ["-r", "acme/widgets", "issue", "42"])
+    assert result.exit_code == 0, result.output
+    assert "Blocked by: #41 API (CLOSED)" in result.output
+    assert "Blocking: #50 UI (OPEN)" in result.output
+
+
+def test_block_cmd_json(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("zh.cli.state.resolve_context", lambda **_: make_ctx())
+    monkeypatch.setattr(
+        "zh.commands.issues.create_blockage",
+        lambda *_a, **_k: {
+            "blocked": "1047",
+            "blocked_title": "Child",
+            "blocking": "1044",
+            "blocking_title": "Parent",
+        },
+    )
+    result = runner.invoke(app, ["-r", "acme/widgets", "block", "1047", "1044", "--json"])
+    assert result.exit_code == 0, result.output
+    assert '"ok": true' in result.output
+    assert '"blocked": 1047' in result.output
+    assert '"blocking": 1044' in result.output
+    assert '"blocked_title": "Child"' in result.output
+
+
+def test_unblock_cmd_json(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("zh.cli.state.resolve_context", lambda **_: make_ctx())
+    monkeypatch.setattr(
+        "zh.commands.issues.remove_blockage",
+        lambda *_a, **_k: {"blocked": 1047, "blocking": 1044, "removed": True},
+    )
+    result = runner.invoke(app, ["-r", "acme/widgets", "unblock", "1047", "1044", "--json"])
+    assert result.exit_code == 0, result.output
+    assert '"ok": true' in result.output
+    assert '"removed": true' in result.output
+    assert '"blocked": 1047' in result.output
+    assert '"blocking": 1044' in result.output
+
+
+def test_unblock_cmd_missing_token(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("zh.cli.state.resolve_context", lambda **_: make_ctx())
+    monkeypatch.setattr(
+        "zh.commands.issues.remove_blockage",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            ZhApiError(
+                "REST API token required for unblock command.\n"
+                "The ZenHub GraphQL API does not support removing dependencies."
+            )
+        ),
+    )
+    result = runner.invoke(app, ["-r", "acme/widgets", "unblock", "1047", "1044", "--json"])
+    assert result.exit_code != 0
+    combined = f"{result.output}\n{result.stderr or ''}".lower()
+    assert "rest api token" in combined
+
+
+def test_unblock_cmd_missing_dependency(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("zh.cli.state.resolve_context", lambda **_: make_ctx())
+    monkeypatch.setattr(
+        "zh.commands.issues.remove_blockage",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            ZhApiError("Dependency not found between #1047 and #1044")
+        ),
+    )
+    result = runner.invoke(app, ["-r", "acme/widgets", "unblock", "1047", "1044"])
+    assert result.exit_code != 0
+    combined = f"{result.output}\n{result.stderr or ''}".lower()
+    assert "dependency not found" in combined
+
+
+def test_remove_blockage_success_and_404(monkeypatch: pytest.MonkeyPatch) -> None:
+    from zh.deps_ops import remove_blockage
+
+    monkeypatch.setattr("zh.deps_ops.resolve_rest_token", lambda _cfg=None: "rest-token")
+    monkeypatch.setattr("zh.deps_ops.get_gh_repo_id", lambda _repo: 12345)
+    monkeypatch.setattr(
+        "zh.deps_ops.request_text",
+        lambda *_a, **_k: (204, ""),
+    )
+    out = remove_blockage("acme/widgets", "1047", "1044")
+    assert out == {"blocked": 1047, "blocking": 1044, "removed": True}
+
+    monkeypatch.setattr(
+        "zh.deps_ops.request_text",
+        lambda *_a, **_k: (404, "not found"),
+    )
+    with pytest.raises(ZhApiError, match="Dependency not found"):
+        remove_blockage("acme/widgets", "1047", "1044")
+
+
+def test_remove_blockage_missing_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    from zh.deps_ops import remove_blockage
+
+    monkeypatch.delenv("ZH_REST_TOKEN", raising=False)
+    monkeypatch.setattr("zh.deps_ops.load_config", lambda: {})
+    with pytest.raises(ZhApiError, match="REST API token required"):
+        remove_blockage("acme/widgets", "1047", "1044")
 
 
 def test_move_cmd_json(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:

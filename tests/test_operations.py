@@ -15,6 +15,12 @@ def _clear_ops_cache() -> None:
     clear_operations_cache()
 
 
+def test_op_loads_issue_pipeline_includes_deps() -> None:
+    src = op("issues", "IssuePipeline")
+    assert "blockingIssues" in src
+    assert "blockedIssues" in src
+
+
 def test_op_loads_named_issue_by_info() -> None:
     src = op("issues", "IssueByInfo")
     assert src.startswith("query IssueByInfo")

@@ -37,10 +37,11 @@ zh workspaces; zh pipelines; zh pipeline "…"   # fan-out just to find one tick
 | Situation | Do this | Skip |
 |---|---|---|
 | Ticket id known (`#1044`, branch `1044-…`, `Tracked in owner/repo#N`) | One targeted write/read: `zh -r owner/repo -w "…" move 1044 Blocked --json` or `zh issue 1044 --json` | version/help, repo greps, git log, listing every pipeline |
+| Known deps: "not blocked / only related" | `zh unblock <blocked> <blocking> [--json]`; keep body Notes `Related: #N` if useful (Hard Rule #6 for body/comment) | inventing a ZenHub "related" API; `zh block/unblock --help` when flags are in skill docs |
 | Edit title/body (known pattern) | Draft → Hard Rule #6 → `zh edit <N> -t "…" -f body.md` → verify `zh issue <N> --json` | `zh edit --help` |
 | Close (agent) | Draft close note → Hard Rule #6 → `zh close <N> -r completed -f /tmp/close.md --json` (or `-m` / `--stdin`). Trust `{state, reason, comment_added}`; optional `zh issue <N> --json` | inventing flags; embedding multi-line body as argv; relying on PR `Closes` after merge to a non-default branch |
 | Comment / move / create (documented in skill) | Use the examples in this skill / operation-patterns | per-command `--help` "to confirm flags" |
-| Need "where is this ticket?" | `zh -r … -w … issue N --json` (includes **pipeline**, estimate, priority, ZH+GH URLs) | `zh pipeline` over every column |
+| Need "where is this ticket?" | `zh -r … -w … issue N --json` (includes **pipeline**, estimate, priority, **blocked_by** / **blocking**, ZH+GH URLs) | `zh pipeline` over every column |
 | Need board overview | `zh board` (and maybe one `zh pipeline` / `zh mine`) | full help dump |
 | First write in an unfamiliar project, **no** Engram/AGENTS filing notes | Read project conventions once (Engram → AGENTS/`CLAUDE.md` filing section); ask if missing | repeating that scan every turn |
 | Real flag/`--json` failure, or user asks "can zh …?", or flag absent from skill docs | `zh <that-command> --help` only | `zh --help` whole tree + `zh version` + preemptive help |
@@ -61,6 +62,8 @@ zh workspaces; zh pipelines; zh pipeline "…"   # fan-out just to find one tick
 zh -r owner/repo -w "Team" board   # global flags before subcommand
 zh edit 36 -t "New title" -f body.md   # title and/or body; then zh issue 36 --json
 zh close 41 -r completed -f /tmp/close.md --json   # multi-line close note; then optional zh issue 41 --json
+zh unblock 1047 1044 --json   # remove blockage edge; Related stays prose in body
+zh block 1047 1044 --json     # set blockage: 1047 blocked BY 1044
 # zh create --help           # ONLY after a real miss / unknown flag — NOT `zh help create`
 # zh --help                  # only when exploring an unfamiliar command family
 ```
@@ -69,13 +72,14 @@ zh close 41 -r completed -f /tmp/close.md --json   # multi-line close note; then
 - **`zh comment edit` body flags (zh ≥ 1.12):** `-m` / `-f` / `--stdin` replace the whole comment; `--fill KEY=value` (repeatable) replaces `{{KEY}}` in the existing body (or in the `-m`/`-f`/`--stdin` body). Prefer `--fill` for deferred PR URL fill after `gh pr create`.
 - **Comment edit index is 1-based:** `zh comment edit <N> <index>` uses **1..len(comments)**. Take `comments[].index` from `zh issue <N> --json`. Do **not** use jq `to_entries[].key` (0-based) or Python `enumerate` without `+1`. Index `0` is always invalid.
 - **No `zh pr` / `zh link`:** linking PRs to issues is GitHub + a comment — see [operation-patterns.md](operation-patterns.md)#link-prs-to-zenhub-issues. Create PRs with `gh pr create`, then notify or fill the issue comment with final URLs. After `gh pr merge`, see **non-default-branch auto-close** below — do not assume `Closes #N` closed the ticket.
-- **Machine output:** `--json` on stdout (human info on stderr) where supported; `-q` emits only the new issue number on create. Prefer `--json` on writes agents must verify (`zh move … --json`, `zh sprint add … --json`, `zh comment edit … --json`, `zh close … --json`, `zh reopen … --json`). **`zh edit` has no `--json`** — apply with `-f`/`-t`/`-d`, then verify via `zh issue <N> --json`.
+- **Machine output:** `--json` on stdout (human info on stderr) where supported; `-q` emits only the new issue number on create. Prefer `--json` on writes agents must verify (`zh move … --json`, `zh sprint add … --json`, `zh comment edit … --json`, `zh close … --json`, `zh reopen … --json`, `zh block … --json`, `zh unblock … --json`). **`zh edit` has no `--json`** — apply with `-f`/`-t`/`-d`, then verify via `zh issue <N> --json`. Do **not** invent `--json` on commands the skill does not document; after a Typer "unexpected option" error, check skill docs / `--help` once.
 - **Close (agent):** `zh close <N> -r completed -f /tmp/close.md --json` → `{ok, number, title, state, reason, comment_added, pipeline?}`. Positional comment is fine for one-liners only. After merge into a non-default branch, always close explicitly (see Hard Rule #1).
+- **Dependencies:** `zh block <blocked> <blocking> [--json]` → `{ok, blocked, blocked_title, blocking, blocking_title}`. `zh unblock <blocked> <blocking> [--json]` → `{ok, blocked, blocking, removed}` — requires `ZH_REST_TOKEN` (GraphQL cannot remove deps). There is **no** ZenHub "related" edge API; related stays body prose (`Related: #N`). Verify edges via `zh issue <N> --json` → `issue.blocked_by` / `issue.blocking`.
 - **Nested subcommands:** `zh sprint add current 42`, `zh comment edit 42 [index]`, `zh epic create "Title"`. Comment add is the default: `zh comment 42 …` ≡ `zh comment add 42 …`. Sprint show defaults similarly: `zh sprint` / `zh sprint current` ≡ `zh sprint show current`.
 - **Sprint membership:** `zh sprint add current 42` and `zh sa current 42` both work. Prefer the explicit form in scripts.
 - **Pipeline moves:** `zh move 42 "In Progress"` or unique prefix/substring (`zh move 42 progress`). `--json` returns `{ok, number, title, from, to}` with the **workspace-scoped** prior/new pipeline. Mutations invalidate GraphQL read caches (in-process + on-disk gen), so a follow-up `zh pipeline` / `zh sprint` sees fresh state without `ZH_GRAPHQL_CACHE_FORCE=1`.
 - **`zh c` vs `zh comment`:** `c` is add-only (no `edit` subcommand). Use `zh comment edit …` for edits.
-- **`zh issue <N> [--json]`:** GitHub body/comments **plus** workspace-scoped `pipeline`, `estimate`, `priority`, `zenhub_url`, `workspace_id`. Each comment includes **`index`** (1-based) for `zh comment edit`. Prefer this over pipeline fan-out when locating one ticket.
+- **`zh issue <N> [--json]`:** GitHub body/comments **plus** workspace-scoped `pipeline`, `estimate`, `priority`, `zenhub_url`, `workspace_id`, **`blocked_by`**, **`blocking`**. Each dependency row is `{number, title, state?}`. Each comment includes **`index`** (1-based) for `zh comment edit`. Prefer this over pipeline fan-out when locating one ticket.
 - **Sandbox / GraphQL cache:** L2 lives under `~/.cache/zh/graphql`. If that path is not writable (Cursor workspace sandbox), zh falls back to in-process L1 and continues. For full L2 under sandbox, add `~/.cache/zh` to `~/.cursor/sandbox.json` → `additionalReadwritePaths` (and `~/.cache/huggingface` for `zh similar`).
 
 ## CLI setup

@@ -33,7 +33,7 @@ When asked to propose a next sprint:
 3. Check each candidate's:
    - Story-point estimate (if set)
    - Assignee (already taken or open)
-   - Dependencies (`zh issue N` shows blockers)
+   - Dependencies (`zh issue N --json` → `issue.blocked_by` / `issue.blocking`; human `zh issue N` prints them too)
    - Epic membership (sprint coherence)
    - Parent / sub-issue relationships (`zh issue N` shows them). For a parent with sub-issues, decide whether to pull just the parent (the team will fan out), pull all sub-issues, or split across sprints. For an orphan sub-issue, surface its parent's status so the team can decide whether to defer until the parent is groomed.
 4. Propose: which tickets to pull into the sprint, in what order, with rationale (size, dependency, who owns)
@@ -113,6 +113,12 @@ For routine operations:
 - **Move**: single ticket can fire directly (`zh move N "<Pipeline>" --json` — trust workspace-scoped `from`/`to`). Bulk moves (>3) → propose-first. Do not pre-scan every pipeline when the ticket number is known.
 - **Reorder**: numeric positions or `top`/`bottom`. Bulk reorders apply position 1 first, then 2, etc. — each call computes from current state.
 - **Assign**: free to fire directly.
+- **Dependencies (block / unblock)**:
+  - Discover: `zh issue <N> --json` → `issue.blocked_by` / `issue.blocking` (also printed on human `zh issue N`).
+  - Set: `zh block <blocked> <blocking> [--json]`.
+  - Remove: `zh unblock <blocked> <blocking> [--json]` (needs `ZH_REST_TOKEN`).
+  - **Related ≠ blocked.** There is no ZenHub "related" edge — keep `Related: #N` in the body (Hard Rule #6 for body edits). Use unblock when the user says tickets are only related / not blocked.
+  - **Stale blocker after upstream closed/done:** prefer `zh unblock` over leaving a closed/done blocker edge. Unblock is a single safe write once the user asked (not Hard Rule #2 destructive); body/comment rewrites still Hard Rule #6. Do not force-close the blocking ticket as part of unblock.
 
 ---
 

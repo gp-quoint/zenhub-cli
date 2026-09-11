@@ -92,7 +92,7 @@ Precedence: **flag > env / config > git-remote + first-workspace fallback**. Use
 | `zh board [--all] [--json]` | Per-pipeline issue counts (`--all` includes closed) |
 | `zh pipelines [--json]` | Pipeline names (plain one-per-line output) |
 | `zh pipeline "<name>" [--json]` | Issues in a pipeline (top = highest priority) |
-| `zh issue <N> [--json]` | Full detail: GH body/comments **plus** workspace-scoped `pipeline`, `estimate`, `priority`, `zenhub_url`, `workspace_id`, parent/sub-issue counts. Each comment has **`index`** (1-based) for `zh comment edit` |
+| `zh issue <N> [--json]` | Full detail: GH body/comments **plus** workspace-scoped `pipeline`, `estimate`, `priority`, `zenhub_url`, `workspace_id`, **`blocked_by`** / **`blocking`** (`[{number, title, state?}, …]`), parent/sub-issue counts. Each comment has **`index`** (1-based) for `zh comment edit` |
 | `zh mine [user] [--no-urls] [--json]` | Issues assigned to current or specified user |
 | `zh users [--json]` | Assignable users (via `gh` collaborators; plain one-per-line output) |
 | `zh workspaces [--json]` | Workspaces for the repo (● = active target) |
@@ -173,8 +173,16 @@ Compare `priority` vs `priority_requested` to detect a partial priority apply (s
 
 | Command | Notes |
 |---|---|
-| `zh block <blocked#> <blocking#>` | Set dependency (blocked BY blocking) |
-| `zh unblock <blocked#> <blocking#>` | Remove dependency — requires `ZH_REST_TOKEN` |
+| `zh block <blocked#> <blocking#> [--json]` | Set dependency (blocked BY blocking). `--json`: `{ok, blocked, blocked_title, blocking, blocking_title}` |
+| `zh unblock <blocked#> <blocking#> [--json]` | Remove dependency. **Requires `ZH_REST_TOKEN`** (GraphQL cannot remove deps). `--json`: `{ok, blocked, blocking, removed: true}`. Missing edge → `Dependency not found between #A and #B` |
+
+**Related ≠ blocked.** ZenHub has no "related" edge API — keep `Related: #N` in the issue body (Hard Rule #6). Use `zh block` / `zh unblock` only for the blockage graph. Discover/verify with `zh issue <N> --json` → `issue.blocked_by` / `issue.blocking`.
+
+```bash
+zh block 1047 1044 --json
+zh unblock 1047 1044 --json
+zh issue 1047 --json   # check issue.blocked_by / issue.blocking
+```
 
 ---
 

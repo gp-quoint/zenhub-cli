@@ -21,6 +21,7 @@ query IssueByInfo($repoId: ID!, $issueNumber: Int!) {
 }
 
 # pipelineIssues is unscoped; nodes[0] may be a different workspace than -w.
+# blockingIssues = issues that block this one (blocked_by); blockedIssues = issues this one blocks.
 query IssuePipeline($repoId: ID!, $issueNumber: Int!, $workspaceId: ID!) {
   issueByInfo(repositoryId: $repoId, issueNumber: $issueNumber) {
     id
@@ -31,6 +32,12 @@ query IssuePipeline($repoId: ID!, $issueNumber: Int!, $workspaceId: ID!) {
     pipelineIssue(workspaceId: $workspaceId) {
       pipeline { id name issues { totalCount } }
       priority { name }
+    }
+    blockingIssues(first: 100) {
+      nodes { number title state }
+    }
+    blockedIssues(first: 100) {
+      nodes { number title state }
     }
   }
 }

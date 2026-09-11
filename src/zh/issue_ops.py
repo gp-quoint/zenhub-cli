@@ -77,8 +77,24 @@ def _pipeline_name_before_move(ctx: RepoContext, issue_number: int) -> str:
         return "Unknown"
 
 
+def _dependency_issue_rows(conn: object) -> list[JsonDict]:
+    """Normalize GraphQL IssueConnection nodes into agent-stable dependency rows."""
+    rows: list[JsonDict] = []
+    for node in dict_nodes(as_dict(conn).get("nodes")):
+        number = json_int(node.get("number"))
+        if number is None:
+            continue
+        row: JsonDict = {"number": number, "title": str(node.get("title") or "")}
+        state = node.get("state")
+        if state:
+            row["state"] = str(state)
+        rows.append(row)
+    return rows
+
+
 def issue_zenhub_summary(ctx: RepoContext, issue_number: int) -> JsonDict:
-    """Workspace-scoped board fields for ``zh issue`` (pipeline, estimate, priority, URL)."""
+    """Workspace-scoped board fields for ``zh issue`` (pipeline, estimate, priority, deps, URL)."""
+    empty_deps: JsonDict = {"blocked_by": [], "blocking": []}
     try:
         node = _fetch_issue_pipeline_node(ctx, issue_number)
     except ZhApiError:
@@ -88,17 +104,21 @@ def issue_zenhub_summary(ctx: RepoContext, issue_number: int) -> JsonDict:
             "priority": None,
             "zenhub_url": zenhub_issue_url(ctx.workspace_id, ctx.owner_repo, issue_number),
             "workspace_id": ctx.workspace_id,
+            **empty_deps,
         }
     scoped = _scoped_pipeline_node(node)
     est = as_dict(node.get("estimate")).get("value")
     priority = as_dict(scoped.get("priority")).get("name")
     zh_url = node.get("zenhubUrl") or zenhub_issue_url(ctx.workspace_id, ctx.owner_repo, issue_number)
+    # GraphQL: blockingIssues = issues that block this one; blockedIssues = issues this one blocks.
     return {
         "pipeline": _pipeline_name_from_scoped(node),
         "estimate": float(est) if isinstance(est, (int, float)) and not isinstance(est, bool) else None,
         "priority": str(priority) if priority else None,
         "zenhub_url": str(zh_url) if zh_url else None,
         "workspace_id": ctx.workspace_id,
+        "blocked_by": _dependency_issue_rows(node.get("blockingIssues")),
+        "blocking": _dependency_issue_rows(node.get("blockedIssues")),
     }
 
 

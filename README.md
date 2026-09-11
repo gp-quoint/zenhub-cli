@@ -182,8 +182,8 @@ ZH_REST_TOKEN=your_rest_token_here
 | `reopen <issue>` | | Reopen a closed issue (`--json`) |
 | `delete <issue> [-y]` | | **Permanently delete** a GitHub issue (via `gh`; needs admin/triage). Prompts to confirm when interactive; `-y`/`--yes` skips. Prefer `close`. |
 | `create <title> [options]` | `new` | Create a new issue (`--json` / `-q` for machine output, `--parent` to nest) |
-| `block <issue> <blocker>` | `blocked-by`, `depends` | Set issue as blocked by another |
-| `unblock <issue> <blocker>` | | Remove a blocking dependency |
+| `block <issue> <blocker> [--json]` | `blocked-by`, `depends` | Set issue as blocked by another |
+| `unblock <issue> <blocker> [--json]` | | Remove a blocking dependency (needs `ZH_REST_TOKEN`) |
 | `priority <issue> [name]` | `prio` | Set or view issue priority by name (workspace-defined; see [Priorities](#priorities)) |
 | `priorities` | `prios` | List the workspace's configured priorities |
 | `type <issue> <name>` | `set-type`, `retype` | Change an existing issue's type |
@@ -207,8 +207,13 @@ ZH_REST_TOKEN=your_rest_token_here
 ### View Issues
 
 ```bash
-# View details of an issue (includes blocking relationships)
+# View issue (includes blocking relationships + workspace pipeline fields)
 zh issue 42
+zh issue 42 --json   # issue.blocked_by / issue.blocking arrays
+
+# Set / remove dependencies
+zh block 123 456 --json
+zh unblock 123 456 --json   # requires ZH_REST_TOKEN
 
 # See issues assigned to you
 zh mine

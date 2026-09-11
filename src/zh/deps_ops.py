@@ -7,7 +7,7 @@ from zh.api import RepoContext, ZhApiError, get_gh_repo_id, load_config, resolve
 from zh.issue_ops import parse_issue_number
 from zh.json_helpers import as_dict, data_get
 from zh.operations import op
-from zh.schemas import BlockageResult
+from zh.schemas import BlockageResult, UnblockResult
 
 ZH_REST_URL = "https://api.zenhub.com/p1/dependencies"
 
@@ -58,7 +58,9 @@ def _raise_for_rest_status(code: int, body: str, *, blocked: int, blocking: int)
             return
         case 401:
             raise ZhApiError(
-                "Authentication failed. Check your ZH_REST_TOKEN.\nGenerate at: https://app.zenhub.com/dashboard/tokens",
+                "Authentication failed. Check your ZH_REST_TOKEN.\n"
+                "Generate at: https://app.zenhub.com/dashboard/tokens\n"
+                "Add to ~/.config/zh/config:\n  ZH_REST_TOKEN=your_token_here",
             )
         case 404:
             raise ZhApiError(f"Dependency not found between #{blocked} and #{blocking}")
@@ -66,8 +68,12 @@ def _raise_for_rest_status(code: int, body: str, *, blocked: int, blocking: int)
             raise ZhApiError(f"Failed to remove dependency (HTTP {code}): {body}")
 
 
-def remove_blockage(owner_repo: str, blocked_raw: str, blocking_raw: str) -> None:
-    """Remove a dependency via the ZenHub REST API (requires ``ZH_REST_TOKEN``)."""
+def remove_blockage(owner_repo: str, blocked_raw: str, blocking_raw: str) -> UnblockResult:
+    """Remove a dependency via the ZenHub REST API (requires ``ZH_REST_TOKEN``).
+
+    GraphQL cannot remove dependencies; callers must have ``ZH_REST_TOKEN`` set
+    in the environment or ``~/.config/zh/config``.
+    """
     blocked_num = parse_issue_number(blocked_raw)
     blocking_num = parse_issue_number(blocking_raw)
     token = resolve_rest_token(load_config())
@@ -87,3 +93,4 @@ def remove_blockage(owner_repo: str, blocked_raw: str, blocking_raw: str) -> Non
         timeout=30.0,
     )
     _raise_for_rest_status(code, body, blocked=blocked_num, blocking=blocking_num)
+    return {"blocked": blocked_num, "blocking": blocking_num, "removed": True}
