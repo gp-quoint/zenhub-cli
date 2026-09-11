@@ -4,7 +4,7 @@ This file provides guidance to Claude Code and other AI assistants when working 
 
 ## Project Overview
 
-`zh` is a bash-based command-line interface for ZenHub that wraps both the GraphQL and REST APIs. It's designed to be used directly by developers or by AI assistants helping with project management tasks.
+`zh` is a Python (Typer) CLI for ZenHub that wraps the GraphQL and REST APIs. Install as an editable uv tool (`zh` on PATH). Designed for developers and AI assistants doing project-management tasks.
 
 ## Automated Review Policy
 
@@ -198,32 +198,24 @@ zh reopen 123 --json
 
 ```
 zenhub-cli/
-├── zh                      # Thin entrypoint (sources lib/, runs main)
-├── lib/                    # Bash command modules (sourced by zh)
-│   ├── core.sh
-│   ├── issue_types.sh
-│   ├── help.sh
-│   ├── discovery.sh
-│   ├── issues.sh
-│   ├── create.sh
-│   ├── deps_priority.sh
-│   ├── hierarchy.sh
-│   ├── sprints.sh
-│   ├── subissues.sh
-│   └── browse.sh
-├── mcp_server.py       # MCP server entry point (FastMCP + tool defs)
-├── zh_api.py           # GraphQL client + auth/repo/workspace resolution
-├── zh_graphql_ops.py   # ZenHub GraphQL ops (sub-issues + sprints)
-├── similarity.py       # Sentence-embedding duplicate detection
-├── tests/              # pytest suite (mocks the network)
-├── agents/zenhub.md    # Generic agent definition (copy to ~/.claude/agents/)
-├── README.md           # User documentation
-├── CLAUDE.md           # This file (AI assistant guidance)
-├── CONTRIBUTING.md     # Contribution workflow
-├── SECURITY.md         # Security posture
-├── LICENSE             # MIT license
-└── .github/workflows/  # CI + Claude review workflows
+├── zh                      # Bash launcher → Python package via uv
+├── src/zh/                 # Package: CLI, GraphQL ops, issue/sprint/deps helpers
+│   ├── cli/                # Typer entry (main, state, output)
+│   ├── commands/           # Subcommand modules (issues, create, sprints, …)
+│   ├── operations/         # *.graphql documents
+│   ├── api.py              # RepoContext, auth, GraphQL execute
+│   ├── issue_ops.py        # Move/estimate/priority/create helpers
+│   ├── deps_ops.py         # block / unblock
+│   └── …
+├── mcp_server.py           # MCP server (FastMCP + tool defs)
+├── tests/                  # pytest suite (mocks the network)
+├── .agents/skills/zenhub/  # Agent skill (symlinked from ~/.agents/skills/zenhub)
+├── agents/zenhub.md        # Generic agent definition
+├── README.md / CLAUDE.md
+└── .github/workflows/      # CI + Claude review workflows
 ```
+
+Root `zh_api.py` / `zh_graphql_ops.py` / `similarity.py` are compatibility shims; prefer `src/zh/`.
 
 Versioning is **VCS-based** (`hatch-vcs`): `zh version` / package metadata come from git tags (`vX.Y.Z` on `main`). Do not hand-edit a version string in `pyproject.toml`.
 ## Configuration
@@ -263,7 +255,7 @@ ZH_REST_TOKEN=...   # REST API token (unblock command only)
 
 ## Development Notes
 
-- Bash entrypoint + lib/ modules, no build process
+- Python package under `src/zh/` (Typer CLI); bash `zh` launcher re-invokes via uv; no separate build step beyond install
 - Uses `jq` for JSON processing
 - Uses `gh` CLI for GitHub API calls
 - GraphQL API at `https://api.zenhub.com/public/graphql`

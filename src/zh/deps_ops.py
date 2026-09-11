@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from zh._http import request_text
 from zh.api import RepoContext, ZhApiError, get_gh_repo_id, load_config, resolve_rest_token
-from zh.issue_ops import parse_issue_number
 from zh.json_helpers import as_dict, data_get
 from zh.operations import op
 from zh.schemas import BlockageResult, UnblockResult
@@ -45,9 +44,9 @@ def create_blockage(ctx: RepoContext, blocked_number: int, blocking_number: int)
     if not blockage_id:
         raise ZhApiError("Failed to create blockage")
     return {
-        "blocked": str(blocked_number),
+        "blocked": blocked_number,
         "blocked_title": str(blocked.get("title") or ""),
-        "blocking": str(blocking_number),
+        "blocking": blocking_number,
         "blocking_title": str(blocking.get("title") or ""),
     }
 
@@ -68,19 +67,17 @@ def _raise_for_rest_status(code: int, body: str, *, blocked: int, blocking: int)
             raise ZhApiError(f"Failed to remove dependency (HTTP {code}): {body}")
 
 
-def remove_blockage(owner_repo: str, blocked_raw: str, blocking_raw: str) -> UnblockResult:
+def remove_blockage(ctx: RepoContext, blocked_number: int, blocking_number: int) -> UnblockResult:
     """Remove a dependency via the ZenHub REST API (requires ``ZH_REST_TOKEN``).
 
     GraphQL cannot remove dependencies; callers must have ``ZH_REST_TOKEN`` set
     in the environment or ``~/.config/zh/config``.
     """
-    blocked_num = parse_issue_number(blocked_raw)
-    blocking_num = parse_issue_number(blocking_raw)
     token = resolve_rest_token(load_config())
-    gh_repo_id = get_gh_repo_id(owner_repo)
+    gh_repo_id = get_gh_repo_id(ctx.owner_repo)
     payload = {
-        "blocking": {"repo_id": gh_repo_id, "issue_number": blocking_num},
-        "blocked": {"repo_id": gh_repo_id, "issue_number": blocked_num},
+        "blocking": {"repo_id": gh_repo_id, "issue_number": blocking_number},
+        "blocked": {"repo_id": gh_repo_id, "issue_number": blocked_number},
     }
     code, body = request_text(
         "DELETE",
@@ -92,5 +89,5 @@ def remove_blockage(owner_repo: str, blocked_raw: str, blocking_raw: str) -> Unb
         json_body=payload,
         timeout=30.0,
     )
-    _raise_for_rest_status(code, body, blocked=blocked_num, blocking=blocking_num)
-    return {"blocked": blocked_num, "blocking": blocking_num, "removed": True}
+    _raise_for_rest_status(code, body, blocked=blocked_number, blocking=blocking_number)
+    return {"blocked": blocked_number, "blocking": blocking_number, "removed": True}

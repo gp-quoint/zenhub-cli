@@ -266,9 +266,9 @@ class ReorderResult(TypedDict):
 
 
 class BlockageResult(TypedDict):
-    blocked: str
+    blocked: int
     blocked_title: str
-    blocking: str
+    blocking: int
     blocking_title: str
 
 
@@ -276,6 +276,22 @@ class UnblockResult(TypedDict):
     blocked: int
     blocking: int
     removed: bool
+
+
+class DependencyIssue(TypedDict, total=False):
+    number: int
+    title: str
+    state: str
+
+
+class IssueZenhubSummary(TypedDict):
+    pipeline: str | None
+    estimate: float | None
+    priority: str | None
+    zenhub_url: str | None
+    workspace_id: str
+    blocked_by: list[DependencyIssue]
+    blocking: list[DependencyIssue]
 
 
 class PlanningListItem(TypedDict, total=False):

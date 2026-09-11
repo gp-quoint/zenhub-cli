@@ -243,9 +243,9 @@ def test_block_cmd_json(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(
         "zh.commands.issues.create_blockage",
         lambda *_a, **_k: {
-            "blocked": "1047",
+            "blocked": 1047,
             "blocked_title": "Child",
-            "blocking": "1044",
+            "blocking": 1044,
             "blocking_title": "Parent",
         },
     )
@@ -305,13 +305,14 @@ def test_unblock_cmd_missing_dependency(runner: CliRunner, monkeypatch: pytest.M
 def test_remove_blockage_success_and_404(monkeypatch: pytest.MonkeyPatch) -> None:
     from zh.deps_ops import remove_blockage
 
+    ctx = make_ctx()
     monkeypatch.setattr("zh.deps_ops.resolve_rest_token", lambda _cfg=None: "rest-token")
     monkeypatch.setattr("zh.deps_ops.get_gh_repo_id", lambda _repo: 12345)
     monkeypatch.setattr(
         "zh.deps_ops.request_text",
         lambda *_a, **_k: (204, ""),
     )
-    out = remove_blockage("acme/widgets", "1047", "1044")
+    out = remove_blockage(ctx, 1047, 1044)
     assert out == {"blocked": 1047, "blocking": 1044, "removed": True}
 
     monkeypatch.setattr(
@@ -319,7 +320,7 @@ def test_remove_blockage_success_and_404(monkeypatch: pytest.MonkeyPatch) -> Non
         lambda *_a, **_k: (404, "not found"),
     )
     with pytest.raises(ZhApiError, match="Dependency not found"):
-        remove_blockage("acme/widgets", "1047", "1044")
+        remove_blockage(ctx, 1047, 1044)
 
 
 def test_remove_blockage_missing_token(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -328,7 +329,7 @@ def test_remove_blockage_missing_token(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ZH_REST_TOKEN", raising=False)
     monkeypatch.setattr("zh.deps_ops.load_config", lambda: {})
     with pytest.raises(ZhApiError, match="REST API token required"):
-        remove_blockage("acme/widgets", "1047", "1044")
+        remove_blockage(make_ctx(), 1047, 1044)
 
 
 def test_move_cmd_json(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:

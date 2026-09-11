@@ -479,15 +479,7 @@ def block_cmd(
     except ZhApiError as exc:
         error(str(exc))
     if json_output or state.json_output:
-        emit_json(
-            {
-                "ok": True,
-                "blocked": int(result["blocked"]),
-                "blocked_title": result["blocked_title"],
-                "blocking": int(result["blocking"]),
-                "blocking_title": result["blocking_title"],
-            }
-        )
+        emit_json({"ok": True, **result})
         return
     success("Created dependency")
     print_line(f"  #{result['blocked']} ({result['blocked_title']})")
@@ -504,18 +496,15 @@ def unblock_cmd(
     """Remove dependency via ZenHub REST API (requires ZH_REST_TOKEN; GraphQL cannot remove deps)."""
     state = get_state(ctx)
     try:
-        result = remove_blockage(state.context().owner_repo, blocked, blocking)
+        result = remove_blockage(
+            state.context(),
+            parse_issue_number(blocked),
+            parse_issue_number(blocking),
+        )
     except ZhApiError as exc:
         error(str(exc))
     if json_output or state.json_output:
-        emit_json(
-            {
-                "ok": True,
-                "blocked": result["blocked"],
-                "blocking": result["blocking"],
-                "removed": result["removed"],
-            }
-        )
+        emit_json({"ok": True, **result})
         return
     success(
         f"Removed dependency: #{result['blocked']} is no longer blocked by #{result['blocking']}"

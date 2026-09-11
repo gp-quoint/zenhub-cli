@@ -12,6 +12,8 @@ from zh.operations import op
 from zh.schemas import (
     AssignResult,
     CreateIssueResult,
+    DependencyIssue,
+    IssueZenhubSummary,
     MoveResult,
     ReorderResult,
     UpdateIssueResult,
@@ -43,17 +45,18 @@ def parse_issue_number(raw: str) -> int:
     return int(stripped)
 
 
-def _scoped_pipeline_node(node: JsonDict) -> JsonDict:
+def _workspace_pipeline_issue(issue_payload: JsonDict) -> JsonDict:
     """Workspace-scoped pipelineIssue payload (pipeline + optional priority)."""
-    return as_dict(node.get("pipelineIssue"))
+    return as_dict(issue_payload.get("pipelineIssue"))
 
 
-def _pipeline_name_from_scoped(node: JsonDict) -> str | None:
-    name = as_dict(_scoped_pipeline_node(node).get("pipeline")).get("name")
+def _pipeline_name_from_scoped(issue_payload: JsonDict) -> str | None:
+    name = as_dict(_workspace_pipeline_issue(issue_payload).get("pipeline")).get("name")
     return str(name) if name else None
 
 
-def _fetch_issue_pipeline_node(ctx: RepoContext, issue_number: int) -> JsonDict:
+def _fetch_issue_board_fields(ctx: RepoContext, issue_number: int) -> JsonDict:
+    """Fetch IssuePipeline ``issueByInfo`` (pipeline, estimate, deps, zenhubUrl)."""
     return as_dict(
         ctx.execute_path(
             _ISSUE_PIPELINE_QUERY,
@@ -63,7 +66,7 @@ def _fetch_issue_pipeline_node(ctx: RepoContext, issue_number: int) -> JsonDict:
                 "workspaceId": ctx.workspace_id,
             },
             "issueByInfo",
-            context="issue pipeline lookup",
+            context="issue board fields lookup",
         ),
     )
 
@@ -71,20 +74,20 @@ def _fetch_issue_pipeline_node(ctx: RepoContext, issue_number: int) -> JsonDict:
 def _pipeline_name_before_move(ctx: RepoContext, issue_number: int) -> str:
     """Best-effort current pipeline name for move reporting (never blocks the move)."""
     try:
-        name = _pipeline_name_from_scoped(_fetch_issue_pipeline_node(ctx, issue_number))
+        name = _pipeline_name_from_scoped(_fetch_issue_board_fields(ctx, issue_number))
         return name or "(none)"
     except ZhApiError:
         return "Unknown"
 
 
-def _dependency_issue_rows(conn: object) -> list[JsonDict]:
+def _dependency_issue_rows(conn: object) -> list[DependencyIssue]:
     """Normalize GraphQL IssueConnection nodes into agent-stable dependency rows."""
-    rows: list[JsonDict] = []
+    rows: list[DependencyIssue] = []
     for node in dict_nodes(as_dict(conn).get("nodes")):
         number = json_int(node.get("number"))
         if number is None:
             continue
-        row: JsonDict = {"number": number, "title": str(node.get("title") or "")}
+        row: DependencyIssue = {"number": number, "title": str(node.get("title") or "")}
         state = node.get("state")
         if state:
             row["state"] = str(state)
@@ -92,25 +95,25 @@ def _dependency_issue_rows(conn: object) -> list[JsonDict]:
     return rows
 
 
-def issue_zenhub_summary(ctx: RepoContext, issue_number: int) -> JsonDict:
+def issue_zenhub_summary(ctx: RepoContext, issue_number: int) -> IssueZenhubSummary:
     """Workspace-scoped board fields for ``zh issue`` (pipeline, estimate, priority, deps, URL)."""
-    empty_deps: JsonDict = {"blocked_by": [], "blocking": []}
+    empty: IssueZenhubSummary = {
+        "pipeline": None,
+        "estimate": None,
+        "priority": None,
+        "zenhub_url": zenhub_issue_url(ctx.workspace_id, ctx.owner_repo, issue_number),
+        "workspace_id": ctx.workspace_id,
+        "blocked_by": [],
+        "blocking": [],
+    }
     try:
-        node = _fetch_issue_pipeline_node(ctx, issue_number)
+        node = _fetch_issue_board_fields(ctx, issue_number)
     except ZhApiError:
-        return {
-            "pipeline": None,
-            "estimate": None,
-            "priority": None,
-            "zenhub_url": zenhub_issue_url(ctx.workspace_id, ctx.owner_repo, issue_number),
-            "workspace_id": ctx.workspace_id,
-            **empty_deps,
-        }
-    scoped = _scoped_pipeline_node(node)
+        return empty
+    scoped = _workspace_pipeline_issue(node)
     est = as_dict(node.get("estimate")).get("value")
     priority = as_dict(scoped.get("priority")).get("name")
     zh_url = node.get("zenhubUrl") or zenhub_issue_url(ctx.workspace_id, ctx.owner_repo, issue_number)
-    # GraphQL: blockingIssues = issues that block this one; blockedIssues = issues this one blocks.
     return {
         "pipeline": _pipeline_name_from_scoped(node),
         "estimate": float(est) if isinstance(est, (int, float)) and not isinstance(est, bool) else None,
@@ -194,7 +197,6 @@ def _build_create_input(
 
 
 def _create_issue_record(ctx: RepoContext, inp: JsonDict) -> JsonDict:
-    # Do not select issueType: ZenHub exposes it as a union; nested selections fail.
     data = ctx.execute(_CREATE_ISSUE, {"input": inp}, context="createIssue")
     issue = as_dict(data_get(data, "createIssue", "issue"))
     if not issue or not isinstance(issue.get("number"), int):
@@ -353,19 +355,17 @@ def set_issue_type(ctx: RepoContext, issue_number: int, type_name: str) -> str:
 
 
 def _issue_pipeline_info(ctx: RepoContext, issue_number: int) -> tuple[str, str, str, int]:
-    issue = get_issue_by_info(ctx, issue_number)
-    if issue is None:
-        raise ZhApiError(f"Issue #{issue_number} not found in ZenHub")
-    issue_id = issue.get("id")
+    node = _fetch_issue_board_fields(ctx, issue_number)
+    issue_id = node.get("id")
     if not isinstance(issue_id, str):
-        raise ZhApiError(f"Issue #{issue_number} has no id")
-    node = _fetch_issue_pipeline_node(ctx, issue_number)
-    pipeline_node = as_dict(_scoped_pipeline_node(node).get("pipeline"))
+        raise ZhApiError(f"Issue #{issue_number} not found in ZenHub")
+    pipeline_node = as_dict(_workspace_pipeline_issue(node).get("pipeline"))
     pipeline_id = pipeline_node.get("id")
     total = as_dict(pipeline_node.get("issues")).get("totalCount") or 0
     if not isinstance(pipeline_id, str):
         raise ZhApiError(f"Issue #{issue_number} is not in any pipeline for this workspace")
-    return issue_id, str(node.get("title") or issue.get("title") or ""), pipeline_id, json_int(total)
+    count = json_int(total)
+    return issue_id, str(node.get("title") or ""), pipeline_id, count if count is not None else 0
 
 
 def _parse_reorder_position(raw: str, total_count: int) -> int:
